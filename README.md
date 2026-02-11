@@ -43,19 +43,12 @@ Minecraft 服务器中，“世界（world）”既是游戏内容载体，也�
 
 ### 2.1 世界生命周期
 
-系统支持两种世界类型：
+系统不再区分世界类型，统一生命周期与回收策略：
 
-#### A. 共享世界（Shared World）
-
-* 玩家上传/注册一个世界（或从模板创建）
-* 世界长期存在
-* 玩家可邀请朋友
-
-#### B. 副本/临时世界（Instance / Ephemeral）
-
-* 从模板创建副本
-* 用于线性地图或短期游玩
-* 到期自动回收/删除
+* 世界创建后进入活跃状态
+* 若连续 14 天无人进入，则自动下线并打包到冷存储
+* 额外缓冲 1 天，避免第 14 天玩家进入但未保存导致误回收
+* 若世界被重新加载/进入，则回到活跃状态并刷新计时
 
 ### 2.2 主要用例
 
@@ -106,12 +99,9 @@ Minecraft 服务器中，“世界（world）”既是游戏内容载体，也�
 
 ### 4.2 后端
 
-* 推荐：Python（FastAPI）或 Node.js（NestJS）
-* 数据库：PostgreSQL（推荐）或 SQLite（MVP 可用）
-* 任务队列：
-
-  * MVP：内置队列（单进程）
-  * 稳定版：Redis + RQ/Celery/BullMQ
+* 实现语言：Go
+* 数据库：PostgreSQL
+* 任务队列：内置队列（单进程 + goroutine），保证请求有序执行
 
 ### 4.3 存储
 
@@ -224,6 +214,10 @@ Multiverse 导入世界时通常要求 world folder 位于 server root 下（`/m
 * `created_at`
 * `last_seen_at`
 
+推荐索引：
+
+* `unique(mc_uuid)`
+
 ### 7.2 MapPresets (Templates)
 
 * `id` (PK)
@@ -235,20 +229,37 @@ Multiverse 导入世界时通常要求 world folder 位于 server root 下（`/m
 * `digest`（sha256）
 * `blob_path`（在 HDD/对象存储的位置）
 * `created_at`
+* `updated_at`
+
+推荐索引：
+
+* `unique(tag)`
+* `index(digest)`
 
 ### 7.3 WorldInstances
 
 * `id` (PK)
-* `instance_type`（shared / ephemeral / persistent）
 * `owner_user_id` (FK)
 * `template_id` (FK, nullable)
 * `internal_name`（例如 `i_12345`）
-* `alias`（例如 `lcmonitor-0`）
+* `alias`（例如 `lcmonitor_0`）
 * `status`（见状态机）
-* `storage_tier`（ssd/hdd）
+* `storage_tier`（ssd/hdd，表示当前实际存放层级）
 * `created_at`
-* `expires_at`（临时世界）
+* `updated_at`
 * `last_active_at`
+* `last_saved_at`
+* `archived_at`（下线/打包时间）
+* `deleted_at`（软删除时间）
+
+推荐索引：
+
+* `unique(internal_name)`
+* `unique(alias)`（若 alias 需全局唯一）
+* `index(owner_user_id)`
+* `index(status)`
+* `index(storage_tier)`
+* `index(last_active_at)`
 
 ### 7.4 InstanceMembers
 
@@ -256,11 +267,16 @@ Multiverse 导入世界时通常要求 world folder 位于 server root 下（`/m
 * `instance_id` (FK)
 * `user_id` (FK)
 * `role`（owner / member / visitor）
+* `created_at`
+
+推荐索引：
+
+* `unique(instance_id, user_id)`
+* `index(user_id)`
 
 ### 7.5 Tasks (Jobs)
 
 * `id` (PK)
-* `task_type`（create/import/delete/archive/restore）
 * `instance_id` (FK)
 * `status`（queued/running/success/failed）
 * `error_code`
@@ -268,6 +284,12 @@ Multiverse 导入世界时通常要求 world folder 位于 server root 下（`/m
 * `created_at`
 * `started_at`
 * `finished_at`
+
+推荐索引：
+
+* `index(instance_id)`
+* `index(status)`
+* `index(created_at)`
 
 ### 7.6 AuditLog
 
@@ -278,11 +300,35 @@ Multiverse 导入世界时通常要求 world folder 位于 server root 下（`/m
 * `payload_json`
 * `created_at`
 
+推荐索引：
+
+* `index(actor_user_id)`
+* `index(instance_id)`
+* `index(created_at)`
+
+### 7.7 IdempotencyRequests
+
+用于 `request_id` 幂等：
+
+* `id` (PK)
+* `request_id` (unique)
+* `instance_id` (FK, nullable)
+* `status`（accepted/processing/succeeded/failed）
+* `created_at`
+* `updated_at`
+
+推荐索引：
+
+* `unique(request_id)`
+* `index(status)`
+
 ---
 
 ## 8. 世界状态机
 
-推荐状态：
+导入流程单独使用状态机；删除/下线流程使用另一个状态机。任务不再区分 task_type。
+
+### 8.1 导入状态机（Create / Import）
 
 * `REQUESTED`
 * `QUEUED`
@@ -293,14 +339,29 @@ Multiverse 导入世界时通常要求 world folder 位于 server root 下（`/m
 * `CONFIGURING_PERMS`
 * `READY`
 * `FAILED`
-* `DELETING`
+
+失败恢复策略：
+
+* 检测世界目录是否存在
+* 检测是否已被 Multiverse 导入
+* 若目录存在但未导入，则清理目录
+* 若已导入，则先执行移除流程确保回到“未导入”状态
+* 随后重头开始执行
+
+幂等策略：
+
+* 以 `request_id` 为幂等键
+* 若世界已存在（目录 + MV 记录），直接返回对应实例
+
+### 8.2 下线/删除状态机（Unload / Archive / Delete）
+
+* `UNLOAD_REQUESTED`
+* `UNLOADING`
+* `ARCHIVING`
 * `ARCHIVED`
-
-原则：
-
-* 每一步可重试
-* 失败时必须可清理（staging 与 root 残留）
-* 每个状态写入 AuditLog
+* `DELETING`
+* `DELETED`
+* `FAILED`
 
 ---
 
@@ -326,7 +387,8 @@ MVP 采用 ServerTap：
 
 * `createInstance` 请求必须携带 `request_id`（UUID）
 * 后端记录 request_id -> instance_id
-* 重复请求返回同一 instance
+* 幂等判定以“世界实际存在性”为准（目录存在 + MV 已导入）
+* 具体依赖 ServerTap 返回输出格式，待进一步确认
 
 ---
 
@@ -358,15 +420,10 @@ MVP 采用 ServerTap：
 
 ## 11. 世界删除与回收
 
-### 11.1 临时世界回收
+### 11.1 世界回收
 
-* expires_at 到期
-* 或 last_active_at 超过阈值（例如 7 天）
-
-回收策略：
-
-* 直接删除（最省空间）
-* 或归档为 tar.zst 到 HDD（保留历史）
+* 若连续 14 天无人进入，则下线并归档到 HDD
+* 使用 `last_saved_at` + 14 天 + 1 天缓冲来判定
 
 ### 11.2 删除流程
 
@@ -425,9 +482,11 @@ MVP 采用 ServerTap：
 
 ### 13.2 alias 分配策略
 
-* 每个用户维护 `next_world_index`
-* 默认 alias：`<safeUsername>-<index>`
-* 用户可修改 alias（校验规则同上）
+* alias 由 `safeUsername_<index>_<customName?>` 组成
+* 仅允许 `[a-z0-9_-]{1,24}`，全部转小写
+* `index` 从 0 递增，删除后不复用
+* 同名玩家暂不考虑冲突（权限以 UUID 为准）
+* 用户可修改 alias（需通过合法性校验）
 
 ---
 
@@ -438,7 +497,7 @@ MVP 采用 ServerTap：
 * `POST /api/v1/link/request`：请求绑定码
 * `POST /api/v1/link/confirm`：确认绑定
 
-（玩家在游戏内执行 `/link <code>`，由插件或命令接口完成）
+（绑定流程尚未最终设计，后续完善）
 
 ### 14.2 模板
 

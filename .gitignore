@@ -27,6 +27,13 @@ go.work.sum
 # env file
 .env
 
+# config
+internal/config/config.yml
+
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# volume
+db_data/
+config.yml
