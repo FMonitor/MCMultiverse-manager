@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"time"
 
+	ilog "mcmm/internal/log"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -29,18 +31,30 @@ func NewConnector(dsn string) *Connector {
 }
 
 func (c *Connector) Connect(ctx context.Context) error {
+	logger := ilog.Component("pgsql")
+	logger.Infof("opening database connection")
 	db, err := sql.Open("pgx", c.dsn)
 	if err != nil {
+		logger.Errorf("sql.Open failed: %v", err)
 		return err
 	}
 	c.db = db
-	return c.db.PingContext(ctx)
+	logger.Infof("pinging database")
+	if err := c.db.PingContext(ctx); err != nil {
+		logger.Errorf("ping failed: %v", err)
+		return err
+	}
+	logger.Infof("database connection ready")
+	return nil
 }
 
 func (c *Connector) Close() error {
+	logger := ilog.Component("pgsql")
 	if c.db == nil {
+		logger.Warnf("close skipped (db is nil)")
 		return nil
 	}
+	logger.Infof("closing database connection")
 	return c.db.Close()
 }
 
@@ -53,9 +67,12 @@ func (c *Connector) ExecContext(ctx context.Context, query string, args ...any) 
 }
 
 func (c *Connector) PingContext(ctx context.Context) error {
+	logger := ilog.Component("pgsql")
 	if c.db == nil {
+		logger.Warnf("ping requested but db is nil")
 		return sql.ErrConnDone
 	}
+	logger.Debugf("pinging database")
 	return c.db.PingContext(ctx)
 }
 

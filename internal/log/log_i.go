@@ -3,6 +3,7 @@ package log
 import (
 	"os"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -21,12 +22,17 @@ const (
 	ansiReset  = "\u001b[0m"
 	ansiRed    = "\u001b[38;2;200;0;0m"
 	ansiRedHi  = "\u001b[38;2;255;80;80m"
+	ansiOrange = "\u001b[38;2;255;140;0m"
 	ansiGreen  = "\u001b[38;2;0;200;0m"
+	ansiLime   = "\u001b[38;2;120;220;80m"
 	ansiYellow = "\u001b[38;2;255;200;0m"
 	ansiBlue   = "\u001b[38;2;80;160;255m"
+	ansiTeal   = "\u001b[38;2;0;170;160m"
 	ansiPurple = "\u001b[38;2;170;85;255m"
+	ansiPink   = "\u001b[38;2;255;120;210m"
 	ansiCyan   = "\u001b[38;2;0;200;200m"
 	ansiGray   = "\u001b[38;2;140;140;140m"
+	ansiWhite  = "\u001b[38;2;220;220;220m"
 )
 
 const (
@@ -40,10 +46,25 @@ const (
 const componentFieldKey = "component"
 
 var componentColorMap = map[string]string{
-	"main":   ansiCyan,
-	"db":     ansiBlue,
-	"worker": ansiYellow,
-	"test":   ansiPurple,
+	"main":        ansiBlue,
+	"worker":      ansiOrange,
+	"test":        ansiGray,
+	"config":      ansiPink,
+	"pgsql":       ansiCyan,
+	"repo":        ansiTeal,
+	"webservice":  ansiPink,
+	"repo_c_test": ansiOrange,
+}
+
+var colorPresetMap = map[string]string{
+	"orange": ansiOrange,
+	"lime":   ansiLime,
+	"cyan":   ansiCyan,
+	"teal":   ansiTeal,
+	"blue":   ansiBlue,
+	"pink":   ansiPink,
+	"gray":   ansiGray,
+	"white":  ansiWhite,
 }
 
 // SetupLogger Default: INFO
@@ -64,17 +85,18 @@ func SetupLogger(logLevel string) {
 	}
 
 	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "time",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeTime:     zapcore.ISO8601TimeEncoder, // UTC timezone
-		EncodeLevel:    colorizeLevelEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
+		TimeKey:          "time",
+		LevelKey:         "level",
+		NameKey:          "logger",
+		CallerKey:        "",
+		MessageKey:       "msg",
+		StacktraceKey:    "stacktrace",
+		LineEnding:       zapcore.DefaultLineEnding,
+		ConsoleSeparator: " ",
+		EncodeTime:       shortISO8601TimeEncoder,
+		EncodeLevel:      colorizeLevelEncoder,
+		EncodeDuration:   zapcore.SecondsDurationEncoder,
+		EncodeCaller:     zapcore.ShortCallerEncoder,
 	}
 
 	core := zapcore.NewCore(
@@ -84,6 +106,30 @@ func SetupLogger(logLevel string) {
 	)
 
 	Logger = zap.New(newComponentCore(core), zap.AddCaller()).Sugar()
+}
+
+func Component(name string) *zap.SugaredLogger {
+	if Logger == nil {
+		SetupLogger(LevelInfo)
+	}
+	return Logger.With("component", name)
+}
+
+// RegisterComponentColor sets one component color using a preset name, e.g. "repo", "teal".
+func RegisterComponentColor(component string, preset string) bool {
+	color, ok := colorPresetMap[strings.ToLower(strings.TrimSpace(preset))]
+	if !ok || component == "" {
+		return false
+	}
+	componentColorMap[component] = color
+	return true
+}
+
+// RegisterComponentPalette sets multiple component colors at once.
+func RegisterComponentPalette(palette map[string]string) {
+	for component, preset := range palette {
+		_ = RegisterComponentColor(component, preset)
+	}
 }
 
 type componentCore struct {
@@ -127,19 +173,25 @@ func (c *componentCore) Write(entry zapcore.Entry, fields []zapcore.Field) error
 	allFields = append(allFields, c.fields...)
 	allFields = append(allFields, fields...)
 
+	msg := entry.Message
 	component := extractComponent(allFields)
 	if component != "" {
-		entry.Message = "[" + component + "] " + entry.Message
+		msg = "[" + component + "] " + msg
 	}
 
 	if color := messageColorForLevel(entry.Level); color != "" {
-		entry.Message = colorize(color, entry.Message)
+		msg = colorize(color, msg)
 	} else if component != "" {
 		if color, ok := componentColorMap[component]; ok {
-			entry.Message = colorize(color, entry.Message)
+			msg = colorize(color, msg)
 		}
 	}
 
+	if entry.Level >= zapcore.WarnLevel && entry.Caller.Defined {
+		msg += "\t" + colorize(ansiGray, entry.Caller.TrimmedPath())
+	}
+
+	entry.Message = msg
 	return c.core.Write(entry, removeComponentFields(allFields))
 }
 
@@ -222,4 +274,8 @@ func messageColorForLevel(level zapcore.Level) string {
 	default:
 		return ""
 	}
+}
+
+func shortISO8601TimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+	enc.AppendString(t.Format("2006-01-02T15:04:05.000"))
 }
