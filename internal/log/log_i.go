@@ -24,7 +24,7 @@ const (
 	ansiRedHi  = "\u001b[38;2;255;80;80m"
 	ansiOrange = "\u001b[38;2;255;140;0m"
 	ansiGreen  = "\u001b[38;2;0;200;0m"
-	ansiLime   = "\u001b[38;2;120;220;80m"
+	ansiLime   = "\u001b[38;2;160;220;80m"
 	ansiYellow = "\u001b[38;2;255;200;0m"
 	ansiBlue   = "\u001b[38;2;80;160;255m"
 	ansiTeal   = "\u001b[38;2;0;170;160m"
@@ -51,6 +51,7 @@ var componentColorMap = map[string]string{
 	"test":        ansiGray,
 	"config":      ansiPink,
 	"pgsql":       ansiCyan,
+	"servertap":   ansiLime,
 	"repo":        ansiTeal,
 	"webservice":  ansiPink,
 	"repo_c_test": ansiOrange,

@@ -1,3 +1,5 @@
 http_addr: ":12345"
 database_url: "postgres://"
 servertap_url: "http://"
+servertap_key: ""
+servertap_auth_header: "key"

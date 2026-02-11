@@ -12,9 +12,11 @@ import (
 )
 
 type Config struct {
-	HTTPAddr  string `yaml:"http_addr"`
-	DBURL     string `yaml:"database_url"`
-	ServerTap string `yaml:"servertap_url"`
+	HTTPAddr            string `yaml:"http_addr"`
+	DBURL               string `yaml:"database_url"`
+	ServerTap           string `yaml:"servertap_url"`
+	ServerTapKey        string `yaml:"servertap_key"`
+	ServerTapAuthHeader string `yaml:"servertap_auth_header"`
 }
 
 func Load() (Config, error) {
