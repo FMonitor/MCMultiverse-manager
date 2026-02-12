@@ -32,18 +32,33 @@ type MapTemplate struct {
 }
 
 type MapInstance struct {
-	ID           int64         `db:"id"`
-	OwnerID      int64         `db:"owner_id"`
-	TemplateID   sql.NullInt64 `db:"template_id"`
-	SourceType   string        `db:"source_type"`
-	InternalName string        `db:"internal_name"`
-	Alias        string        `db:"alias"`
-	Status       string        `db:"status"`
-	StorageType  string        `db:"storage_type"`
-	CreatedAt    time.Time     `db:"created_at"`
-	UpdatedAt    time.Time     `db:"updated_at"`
-	LastActiveAt sql.NullTime  `db:"last_active_at"`
-	ArchivedAt   sql.NullTime  `db:"archived_at"`
+	ID           int64          `db:"id"`
+	OwnerID      int64          `db:"owner_id"`
+	TemplateID   sql.NullInt64  `db:"template_id"`
+	ServerID     sql.NullString `db:"server_id"`
+	SourceType   string         `db:"source_type"`
+	GameVersion  string         `db:"game_version"`
+	InternalName string         `db:"internal_name"`
+	Alias        string         `db:"alias"`
+	Status       string         `db:"status"`
+	StorageType  string         `db:"storage_type"`
+	CreatedAt    time.Time      `db:"created_at"`
+	UpdatedAt    time.Time      `db:"updated_at"`
+	LastActiveAt sql.NullTime   `db:"last_active_at"`
+	ArchivedAt   sql.NullTime   `db:"archived_at"`
+}
+
+type GameServer struct {
+	ID                  string    `db:"id"`
+	Name                string    `db:"name"`
+	GameVersion         string    `db:"game_version"`
+	RootPath            string    `db:"root_path"`
+	ServerTapURL        string    `db:"servertap_url"`
+	ServerTapKey        string    `db:"servertap_key"`
+	ServerTapAuthHeader string    `db:"servertap_auth_header"`
+	Enabled             bool      `db:"enabled"`
+	CreatedAt           time.Time `db:"created_at"`
+	UpdatedAt           time.Time `db:"updated_at"`
 }
 
 type InstanceMember struct {

@@ -12,11 +12,24 @@ import (
 )
 
 type Config struct {
-	HTTPAddr            string `yaml:"http_addr"`
-	DBURL               string `yaml:"database_url"`
-	ServerTap           string `yaml:"servertap_url"`
+	HTTPAddr            string         `yaml:"http_addr"`
+	DBURL               string         `yaml:"database_url"`
+	ServerTap           string         `yaml:"servertap_url"`
+	ServerTapKey        string         `yaml:"servertap_key"`
+	ServerTapAuthHeader string         `yaml:"servertap_auth_header"`
+	ServerPath          string         `yaml:"serverpath"`
+	Servers             []ServerConfig `yaml:"servers"`
+}
+
+type ServerConfig struct {
+	ID                  string `yaml:"id"`
+	Name                string `yaml:"name"`
+	GameVersion         string `yaml:"game_version"`
+	RootPath            string `yaml:"root_path"`
+	ServerTapURL        string `yaml:"servertap_url"`
 	ServerTapKey        string `yaml:"servertap_key"`
 	ServerTapAuthHeader string `yaml:"servertap_auth_header"`
+	Enabled             bool   `yaml:"enabled"`
 }
 
 func Load() (Config, error) {
@@ -63,8 +76,22 @@ func (c Config) Validate() error {
 	if c.DBURL == "" {
 		return errors.New("database_url is required")
 	}
-	if c.ServerTap == "" {
-		return errors.New("servertap_url is required")
+	if len(c.Servers) == 0 && c.ServerTap == "" {
+		return errors.New("servertap_url is required when servers is empty")
+	}
+	for i, s := range c.Servers {
+		if s.ID == "" {
+			return fmt.Errorf("servers[%d].id is required", i)
+		}
+		if s.GameVersion == "" {
+			return fmt.Errorf("servers[%d].game_version is required", i)
+		}
+		if s.RootPath == "" {
+			return fmt.Errorf("servers[%d].root_path is required", i)
+		}
+		if s.ServerTapURL == "" {
+			return fmt.Errorf("servers[%d].servertap_url is required", i)
+		}
 	}
 	return nil
 }

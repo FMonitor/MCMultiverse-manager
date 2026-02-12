@@ -14,6 +14,7 @@ type SQLConnector interface {
 	Connect(ctx context.Context) error
 	Close() error
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	PingContext(ctx context.Context) error
 	SetMaxOpenConns(n int)
@@ -60,6 +61,10 @@ func (c *Connector) Close() error {
 
 func (c *Connector) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return c.db.QueryRowContext(ctx, query, args...)
+}
+
+func (c *Connector) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return c.db.QueryContext(ctx, query, args...)
 }
 
 func (c *Connector) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {

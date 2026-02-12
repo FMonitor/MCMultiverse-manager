@@ -25,11 +25,28 @@ CREATE TABLE IF NOT EXISTS map_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_map_templates_sha256_hash ON map_templates (sha256_hash);
 
+CREATE TABLE IF NOT EXISTS game_servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  game_version TEXT NOT NULL,
+  root_path TEXT NOT NULL,
+  servertap_url TEXT NOT NULL,
+  servertap_key TEXT NOT NULL DEFAULT '',
+  servertap_auth_header TEXT NOT NULL DEFAULT 'key',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_game_servers_game_version ON game_servers (game_version);
+CREATE INDEX IF NOT EXISTS idx_game_servers_enabled ON game_servers (enabled);
+
 CREATE TABLE IF NOT EXISTS map_instances (
   id BIGSERIAL PRIMARY KEY,
   owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   template_id BIGINT REFERENCES map_templates(id) ON DELETE SET NULL,
+  server_id TEXT REFERENCES game_servers(id) ON DELETE SET NULL,
   source_type TEXT NOT NULL CHECK (source_type IN ('template', 'upload')),
+  game_version TEXT NOT NULL DEFAULT 'unknown',
   internal_name TEXT NOT NULL UNIQUE CHECK (internal_name ~ '^[a-z0-9_]+$'),
   alias TEXT NOT NULL UNIQUE CHECK (alias ~ '^[a-z0-9_-]{1,24}$'),
   status TEXT NOT NULL,
@@ -41,6 +58,8 @@ CREATE TABLE IF NOT EXISTS map_instances (
 );
 CREATE INDEX IF NOT EXISTS idx_map_instances_owner_id ON map_instances (owner_id);
 CREATE INDEX IF NOT EXISTS idx_map_instances_template_id ON map_instances (template_id);
+CREATE INDEX IF NOT EXISTS idx_map_instances_server_id ON map_instances (server_id);
+CREATE INDEX IF NOT EXISTS idx_map_instances_game_version ON map_instances (game_version);
 CREATE INDEX IF NOT EXISTS idx_map_instances_status ON map_instances (status);
 CREATE INDEX IF NOT EXISTS idx_map_instances_storage_type ON map_instances (storage_type);
 

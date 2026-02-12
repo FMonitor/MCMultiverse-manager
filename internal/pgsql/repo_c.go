@@ -27,8 +27,18 @@ type MapTemplateRepo interface {
 	Create(ctx context.Context, template MapTemplate) (int64, error)
 	Read(ctx context.Context, id int64) (MapTemplate, error)
 	ReadByTag(ctx context.Context, tag string) (MapTemplate, error)
+	ListByGameVersion(ctx context.Context, gameVersion string) ([]MapTemplate, error)
+	ListGameVersions(ctx context.Context) ([]string, error)
 	Update(ctx context.Context, template MapTemplate) error
 	Delete(ctx context.Context, id int64) error
+}
+
+type GameServerRepo interface {
+	Create(ctx context.Context, server GameServer) error
+	Read(ctx context.Context, id string) (GameServer, error)
+	List(ctx context.Context) ([]GameServer, error)
+	Update(ctx context.Context, server GameServer) error
+	Delete(ctx context.Context, id string) error
 }
 
 type MapInstanceRepo interface {
@@ -74,6 +84,7 @@ type Repos struct {
 	SchemaMigration SchemaMigrationRepo
 	User            UserRepo
 	MapTemplate     MapTemplateRepo
+	GameServer      GameServerRepo
 	MapInstance     MapInstanceRepo
 	InstanceMember  InstanceMemberRepo
 	LoadTask        LoadTaskRepo
@@ -86,6 +97,7 @@ func NewRepos(connector SQLConnector) Repos {
 		SchemaMigration: NewSchemaMigrationRepoI(connector),
 		User:            NewUserRepoI(connector),
 		MapTemplate:     NewMapTemplateRepoI(connector),
+		GameServer:      NewGameServerRepoI(connector),
 		MapInstance:     NewMapInstanceRepoI(connector),
 		InstanceMember:  NewInstanceMemberRepoI(connector),
 		LoadTask:        NewLoadTaskRepoI(connector),
