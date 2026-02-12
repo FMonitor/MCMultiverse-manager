@@ -1,31 +1,28 @@
 package io.lcmonitor.mcmmrequester;
 
 import java.io.IOException;
-import java.net.URI;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
+import java.util.Scanner;
 import java.util.UUID;
 
 public final class BackendClient {
     private final String baseUrl;
     private final String token;
-    private final HttpClient client;
+    private final int timeoutMs;
 
     public BackendClient(String baseUrl, String token, int timeoutMs) {
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.token = token == null ? "" : token.trim();
-        int timeout = Math.max(timeoutMs, 1000);
-        this.client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(timeout))
-                .build();
+        this.timeoutMs = Math.max(timeoutMs, 1000);
     }
 
     public BackendResponse postWorldAction(String action, String actorUuid, String actorName, String worldAlias, String targetName)
-            throws IOException, InterruptedException {
+            throws IOException {
         String form = "action=" + enc(action)
                 + "&actor_uuid=" + enc(actorUuid)
                 + "&actor_name=" + enc(actorName)
@@ -33,18 +30,42 @@ public final class BackendClient {
                 + "&target_name=" + enc(targetName == null ? "" : targetName)
                 + "&request_id=" + enc(UUID.randomUUID().toString());
 
-        HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/v1/cmd/world"))
-                .timeout(Duration.ofSeconds(10))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(form));
-
-        if (!token.isBlank()) {
-            reqBuilder.header("Authorization", "Bearer " + token);
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/v1/cmd/world").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(timeoutMs);
+        conn.setReadTimeout(timeoutMs);
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        if (!token.trim().isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
         }
 
-        HttpResponse<String> response = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
-        return new BackendResponse(response.statusCode(), response.body());
+        byte[] payload = form.getBytes(StandardCharsets.UTF_8);
+        conn.setRequestProperty("Content-Length", String.valueOf(payload.length));
+        OutputStream os = conn.getOutputStream();
+        os.write(payload);
+        os.flush();
+        os.close();
+
+        int code = conn.getResponseCode();
+        Scanner scanner;
+        if (code >= 200 && code < 400) {
+            scanner = new Scanner(conn.getInputStream(), "UTF-8");
+        } else if (conn.getErrorStream() != null) {
+            scanner = new Scanner(conn.getErrorStream(), "UTF-8");
+        } else {
+            scanner = null;
+        }
+
+        String body = "";
+        if (scanner != null) {
+            scanner.useDelimiter("\\A");
+            body = scanner.hasNext() ? scanner.next() : "";
+            scanner.close();
+        }
+        conn.disconnect();
+
+        return new BackendResponse(code, body);
     }
 
     private static String trimTrailingSlash(String input) {
@@ -56,8 +77,29 @@ public final class BackendClient {
     }
 
     private static String enc(String value) {
-        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
+        try {
+            return URLEncoder.encode(value == null ? "" : value, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            // UTF-8 is always available in JVM; fallback for checked exception compatibility.
+            return value == null ? "" : value;
+        }
     }
 
-    public record BackendResponse(int statusCode, String body) {}
+    public static final class BackendResponse {
+        private final int statusCode;
+        private final String body;
+
+        public BackendResponse(int statusCode, String body) {
+            this.statusCode = statusCode;
+            this.body = body;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+
+        public String body() {
+            return body;
+        }
+    }
 }

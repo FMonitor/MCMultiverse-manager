@@ -42,3 +42,9 @@ config.yml
 # gradle/plugin build
 .gradle/
 **/build/
+
+# deploy
+world*
+cache/
+versions/
+libraries/

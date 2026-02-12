@@ -16,116 +16,61 @@ func (f *fakeExecutor) Execute(_ context.Context, req ExecuteRequest) (ParsedRes
 	return f.resp, f.err
 }
 
-func TestServiceC_MVImport(t *testing.T) {
+func TestServiceC_OPUser(t *testing.T) {
 	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
 	svc := NewServiceC(fx)
 
-	_, err := svc.MVImport(context.Background(), "world_a", "NORMAL")
+	_, err := svc.OPUser(context.Background(), "vulcan9")
 	if err != nil {
-		t.Fatalf("MVImport failed: %v", err)
+		t.Fatalf("OPUser failed: %v", err)
 	}
-	if fx.lastReq.Command != "mv import world_a NORMAL" {
+	if fx.lastReq.Command != "op vulcan9" {
 		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
 	}
 }
 
-func TestServiceC_MVGameRule(t *testing.T) {
+func TestServiceC_DEOPUser(t *testing.T) {
 	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
 	svc := NewServiceC(fx)
 
-	_, err := svc.MVGameRule(context.Background(), "keepInventory", "true", "lobby")
+	_, err := svc.DEOPUser(context.Background(), "vulcan9")
 	if err != nil {
-		t.Fatalf("MVGameRule failed: %v", err)
+		t.Fatalf("DEOPUser failed: %v", err)
 	}
-	if fx.lastReq.Command != "mv gamerule keepInventory true lobby" {
+	if fx.lastReq.Command != "deop vulcan9" {
 		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
 	}
 }
 
-func TestServiceC_MVUnload_RequireWorld(t *testing.T) {
+func TestServiceC_ListOps(t *testing.T) {
+	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
+	svc := NewServiceC(fx)
+
+	_, err := svc.ListOps(context.Background())
+	if err != nil {
+		t.Fatalf("ListOps failed: %v", err)
+	}
+	if fx.lastReq.Command != "ops" {
+		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
+	}
+}
+
+func TestServiceC_OPUser_RequireUser(t *testing.T) {
 	fx := &fakeExecutor{}
 	svc := NewServiceC(fx)
 
-	_, err := svc.MVUnload(context.Background(), "")
+	_, err := svc.OPUser(context.Background(), "")
 	if err == nil {
-		t.Fatalf("expected error for empty world")
+		t.Fatalf("expected error for empty user")
 	}
 }
 
-func TestServiceC_MVSetAlias(t *testing.T) {
-	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
+func TestServiceC_DEOPUser_RequireUser(t *testing.T) {
+	fx := &fakeExecutor{}
 	svc := NewServiceC(fx)
 
-	_, err := svc.MVSetAlias(context.Background(), "lobby", "mynamae")
-	if err != nil {
-		t.Fatalf("MVSetAlias failed: %v", err)
-	}
-	if fx.lastReq.Command != "mvm set alias mynamae lobby" {
-		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
-	}
-}
-
-func TestServiceC_LPGroupListMembers(t *testing.T) {
-	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
-	svc := NewServiceC(fx)
-
-	_, err := svc.LPGroupListMembers(context.Background(), "worldop")
-	if err != nil {
-		t.Fatalf("LPGroupListMembers failed: %v", err)
-	}
-	if fx.lastReq.Command != "lp group worldop listmembers" {
-		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
-	}
-}
-
-func TestServiceC_LPUserParentAdd(t *testing.T) {
-	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
-	svc := NewServiceC(fx)
-
-	_, err := svc.LPUserParentAdd(context.Background(), "vulcan9", "worldop", "")
-	if err != nil {
-		t.Fatalf("LPUserParentAdd failed: %v", err)
-	}
-	if fx.lastReq.Command != "lp user vulcan9 parent add worldop" {
-		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
-	}
-}
-
-func TestServiceC_LPUserParentRemove(t *testing.T) {
-	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
-	svc := NewServiceC(fx)
-
-	_, err := svc.LPUserParentRemove(context.Background(), "vulcan9", "worldop", "")
-	if err != nil {
-		t.Fatalf("LPUserParentRemove failed: %v", err)
-	}
-	if fx.lastReq.Command != "lp user vulcan9 parent remove worldop" {
-		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
-	}
-}
-
-func TestServiceC_LPUserParentAdd_WithWorldContext(t *testing.T) {
-	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
-	svc := NewServiceC(fx)
-
-	_, err := svc.LPUserParentAdd(context.Background(), "vulcan9", "worldmember", "i_10452")
-	if err != nil {
-		t.Fatalf("LPUserParentAdd failed: %v", err)
-	}
-	if fx.lastReq.Command != "lp user vulcan9 parent add worldmember world=i_10452" {
-		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
-	}
-}
-
-func TestServiceC_LPUserParentRemove_WithWorldContext(t *testing.T) {
-	fx := &fakeExecutor{resp: ParsedResponse{StatusCode: 200}}
-	svc := NewServiceC(fx)
-
-	_, err := svc.LPUserParentRemove(context.Background(), "vulcan9", "worldmember", "i_10452")
-	if err != nil {
-		t.Fatalf("LPUserParentRemove failed: %v", err)
-	}
-	if fx.lastReq.Command != "lp user vulcan9 parent remove worldmember world=i_10452" {
-		t.Fatalf("unexpected command: %q", fx.lastReq.Command)
+	_, err := svc.DEOPUser(context.Background(), "")
+	if err == nil {
+		t.Fatalf("expected error for empty user")
 	}
 }

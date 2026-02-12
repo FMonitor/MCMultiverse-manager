@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^sudo rm -rf /tmp/temurin-jre17 /tmp/temurin-jre8 && mkdir -p /tmp/temurin-jre17 /tmp/temurin-jre8 && \ncd /tmp/temurin-jre17 && curl -L -f --retry 3 -o jre17\\.tar\\.gz \"https://api\\.adoptium\\.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse\\?project=jre\" && \ncd /tmp/temurin-jre8 && curl -L -f --retry 3 -o jre8\\.tar\\.gz \"https://api\\.adoptium\\.net/v3/binary/latest/8/ga/linux/x64/jre/hotspot/normal/eclipse\\?project=jre\" && \ncd /tmp/temurin-jre17 && tar -xzf jre17\\.tar\\.gz && \ncd /tmp/temurin-jre8 && tar -xzf jre8\\.tar\\.gz && \nJRE17_DIR=\\$\\(find /tmp/temurin-jre17 -maxdepth 1 -type d -name \"jre\\*\" -o -name \"jdk\\*\" \\| head -n 1\\) && \nJRE8_DIR=\\$\\(find /tmp/temurin-jre8 -maxdepth 1 -type d -name \"jre\\*\" -o -name \"jdk\\*\" \\| head -n 1\\) && \nsudo rm -rf /home/monitor/MultiMap-1\\.20\\.1/java17/\\* /home/monitor/MultiMap-1\\.18\\.2/java17/\\* /home/monitor/MultiMap-1\\.16\\.5/java8/\\* && \nsudo cp -a \"\\$JRE17_DIR\"/\\* /home/monitor/MultiMap-1\\.20\\.1/java17/ && \nsudo cp -a \"\\$JRE17_DIR\"/\\* /home/monitor/MultiMap-1\\.18\\.2/java17/ && \nsudo cp -a \"\\$JRE8_DIR\"/\\* /home/monitor/MultiMap-1\\.16\\.5/java8/ && \nsudo chown -R monitor:monitor /home/monitor/MultiMap-1\\.20\\.1/java17 /home/monitor/MultiMap-1\\.18\\.2/java17 /home/monitor/MultiMap-1\\.16\\.5/java8$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
