@@ -29,6 +29,7 @@ go.work.sum
 
 # config
 internal/config/config.yml
+config/config.yml
 
 # Editor/IDE
 # .idea/
@@ -37,3 +38,7 @@ internal/config/config.yml
 # volume
 db_data/
 config.yml
+
+# gradle/plugin build
+.gradle/
+**/build/

@@ -1,0 +1,14 @@
+name: MCMMRequester
+version: '0.1.0'
+main: io.lcmonitor.mcmmrequester.MCMMRequesterPlugin
+api-version: '1.21'
+authors: [LCMonitor]
+commands:
+  mcmm:
+    description: MCMM command entrypoint
+    usage: "/mcmm world <create|<alias> add/remove user <user>|<alias> delete> | /mcmm confirm"
+    permission: mcmmrequester.use
+permissions:
+  mcmmrequester.use:
+    description: Allows player to use /mcmm commands
+    default: true
