@@ -8,13 +8,6 @@ import (
 
 // c-layer contracts exposed to other packages.
 
-type SchemaMigrationRepo interface {
-	Create(ctx context.Context, migration SchemaMigration) error
-	Read(ctx context.Context, version string) (SchemaMigration, error)
-	Update(ctx context.Context, migration SchemaMigration) error
-	Delete(ctx context.Context, version string) error
-}
-
 type UserRepo interface {
 	Create(ctx context.Context, user User) (int64, error)
 	Read(ctx context.Context, id int64) (User, error)
@@ -33,18 +26,17 @@ type MapTemplateRepo interface {
 	Delete(ctx context.Context, id int64) error
 }
 
-type GameServerRepo interface {
-	Create(ctx context.Context, server GameServer) error
-	Read(ctx context.Context, id string) (GameServer, error)
-	List(ctx context.Context) ([]GameServer, error)
-	Update(ctx context.Context, server GameServer) error
+type ServerImageRepo interface {
+	Create(ctx context.Context, image ServerImage) error
+	Read(ctx context.Context, id string) (ServerImage, error)
+	List(ctx context.Context) ([]ServerImage, error)
+	Update(ctx context.Context, image ServerImage) error
 	Delete(ctx context.Context, id string) error
 }
 
 type MapInstanceRepo interface {
 	Create(ctx context.Context, inst MapInstance) (int64, error)
 	Read(ctx context.Context, id int64) (MapInstance, error)
-	ReadByAlias(ctx context.Context, alias string) (MapInstance, error)
 	Update(ctx context.Context, inst MapInstance) error
 	Delete(ctx context.Context, id int64) error
 }
@@ -53,20 +45,6 @@ type InstanceMemberRepo interface {
 	Create(ctx context.Context, member InstanceMember) (int64, error)
 	Read(ctx context.Context, id int64) (InstanceMember, error)
 	Update(ctx context.Context, member InstanceMember) error
-	Delete(ctx context.Context, id int64) error
-}
-
-type LoadTaskRepo interface {
-	Create(ctx context.Context, task LoadTask) (int64, error)
-	Read(ctx context.Context, id int64) (LoadTask, error)
-	Update(ctx context.Context, task LoadTask) error
-	Delete(ctx context.Context, id int64) error
-}
-
-type AuditLogRepo interface {
-	Create(ctx context.Context, al AuditLog) (int64, error)
-	Read(ctx context.Context, id int64) (AuditLog, error)
-	Update(ctx context.Context, al AuditLog) error
 	Delete(ctx context.Context, id int64) error
 }
 
@@ -81,27 +59,21 @@ type UserRequestRepo interface {
 }
 
 type Repos struct {
-	SchemaMigration SchemaMigrationRepo
-	User            UserRepo
-	MapTemplate     MapTemplateRepo
-	GameServer      GameServerRepo
-	MapInstance     MapInstanceRepo
-	InstanceMember  InstanceMemberRepo
-	LoadTask        LoadTaskRepo
-	AuditLog        AuditLogRepo
-	UserRequest     UserRequestRepo
+	User           UserRepo
+	MapTemplate    MapTemplateRepo
+	ServerImage    ServerImageRepo
+	MapInstance    MapInstanceRepo
+	InstanceMember InstanceMemberRepo
+	UserRequest    UserRequestRepo
 }
 
 func NewRepos(connector SQLConnector) Repos {
 	return Repos{
-		SchemaMigration: NewSchemaMigrationRepoI(connector),
-		User:            NewUserRepoI(connector),
-		MapTemplate:     NewMapTemplateRepoI(connector),
-		GameServer:      NewGameServerRepoI(connector),
-		MapInstance:     NewMapInstanceRepoI(connector),
-		InstanceMember:  NewInstanceMemberRepoI(connector),
-		LoadTask:        NewLoadTaskRepoI(connector),
-		AuditLog:        NewAuditLogRepoI(connector),
-		UserRequest:     NewUserRequestRepoI(connector),
+		User:           NewUserRepoI(connector),
+		MapTemplate:    NewMapTemplateRepoI(connector),
+		ServerImage:    NewServerImageRepoI(connector),
+		MapInstance:    NewMapInstanceRepoI(connector),
+		InstanceMember: NewInstanceMemberRepoI(connector),
+		UserRequest:    NewUserRequestRepoI(connector),
 	}
 }

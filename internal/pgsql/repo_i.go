@@ -8,47 +8,6 @@ import (
 
 // i-layer implementations.
 
-type SchemaMigrationRepoI struct{ connector SQLConnector }
-
-func NewSchemaMigrationRepoI(connector SQLConnector) *SchemaMigrationRepoI {
-	return &SchemaMigrationRepoI{connector: connector}
-}
-
-func (r *SchemaMigrationRepoI) Create(ctx context.Context, migration SchemaMigration) error {
-	_, err := r.connector.ExecContext(ctx, `
-		INSERT INTO schema_migrations (version, applied_at)
-		VALUES ($1, NOW())
-	`, migration.Version)
-	return err
-}
-
-func (r *SchemaMigrationRepoI) Read(ctx context.Context, version string) (SchemaMigration, error) {
-	var m SchemaMigration
-	err := r.connector.QueryRowContext(ctx, `
-		SELECT version, applied_at
-		FROM schema_migrations
-		WHERE version = $1
-	`, version).Scan(&m.Version, &m.AppliedAt)
-	if err != nil {
-		return SchemaMigration{}, err
-	}
-	return m, nil
-}
-
-func (r *SchemaMigrationRepoI) Update(ctx context.Context, migration SchemaMigration) error {
-	_, err := r.connector.ExecContext(ctx, `
-		UPDATE schema_migrations
-		SET applied_at = NOW()
-		WHERE version = $1
-	`, migration.Version)
-	return err
-}
-
-func (r *SchemaMigrationRepoI) Delete(ctx context.Context, version string) error {
-	_, err := r.connector.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = $1`, version)
-	return err
-}
-
 type UserRepoI struct{ connector SQLConnector }
 
 func NewUserRepoI(connector SQLConnector) *UserRepoI { return &UserRepoI{connector: connector} }
@@ -212,41 +171,37 @@ func (r *MapTemplateRepoI) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
-type GameServerRepoI struct{ connector SQLConnector }
+type ServerImageRepoI struct{ connector SQLConnector }
 
-func NewGameServerRepoI(connector SQLConnector) *GameServerRepoI {
-	return &GameServerRepoI{connector: connector}
+func NewServerImageRepoI(connector SQLConnector) *ServerImageRepoI {
+	return &ServerImageRepoI{connector: connector}
 }
 
-func (r *GameServerRepoI) Create(ctx context.Context, server GameServer) error {
+func (r *ServerImageRepoI) Create(ctx context.Context, image ServerImage) error {
 	_, err := r.connector.ExecContext(ctx, `
-		INSERT INTO game_servers (
-			id, name, game_version, root_path, servertap_url, servertap_key, servertap_auth_header, enabled, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-	`, server.ID, server.Name, server.GameVersion, server.RootPath, server.ServerTapURL, server.ServerTapKey, server.ServerTapAuthHeader, server.Enabled)
+		INSERT INTO server_images (id, name, game_version)
+		VALUES ($1, $2, $3)
+	`, image.ID, image.Name, image.GameVersion)
 	return err
 }
 
-func (r *GameServerRepoI) Read(ctx context.Context, id string) (GameServer, error) {
-	var s GameServer
+func (r *ServerImageRepoI) Read(ctx context.Context, id string) (ServerImage, error) {
+	var image ServerImage
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, name, game_version, root_path, servertap_url, servertap_key, servertap_auth_header, enabled, created_at, updated_at
-		FROM game_servers
+		SELECT id, name, game_version
+		FROM server_images
 		WHERE id = $1
-	`, id).Scan(
-		&s.ID, &s.Name, &s.GameVersion, &s.RootPath, &s.ServerTapURL, &s.ServerTapKey, &s.ServerTapAuthHeader, &s.Enabled, &s.CreatedAt, &s.UpdatedAt,
-	)
+	`, id).Scan(&image.ID, &image.Name, &image.GameVersion)
 	if err != nil {
-		return GameServer{}, err
+		return ServerImage{}, err
 	}
-	return s, nil
+	return image, nil
 }
 
-func (r *GameServerRepoI) List(ctx context.Context) ([]GameServer, error) {
+func (r *ServerImageRepoI) List(ctx context.Context) ([]ServerImage, error) {
 	rows, err := r.connector.QueryContext(ctx, `
-		SELECT id, name, game_version, root_path, servertap_url, servertap_key, servertap_auth_header, enabled, created_at, updated_at
-		FROM game_servers
+		SELECT id, name, game_version
+		FROM server_images
 		ORDER BY id
 	`)
 	if err != nil {
@@ -254,13 +209,13 @@ func (r *GameServerRepoI) List(ctx context.Context) ([]GameServer, error) {
 	}
 	defer rows.Close()
 
-	out := make([]GameServer, 0)
+	out := make([]ServerImage, 0)
 	for rows.Next() {
-		var s GameServer
-		if err := rows.Scan(&s.ID, &s.Name, &s.GameVersion, &s.RootPath, &s.ServerTapURL, &s.ServerTapKey, &s.ServerTapAuthHeader, &s.Enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		var image ServerImage
+		if err := rows.Scan(&image.ID, &image.Name, &image.GameVersion); err != nil {
 			return nil, err
 		}
-		out = append(out, s)
+		out = append(out, image)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -268,24 +223,17 @@ func (r *GameServerRepoI) List(ctx context.Context) ([]GameServer, error) {
 	return out, nil
 }
 
-func (r *GameServerRepoI) Update(ctx context.Context, server GameServer) error {
+func (r *ServerImageRepoI) Update(ctx context.Context, image ServerImage) error {
 	_, err := r.connector.ExecContext(ctx, `
-		UPDATE game_servers
-		SET name = $2,
-		    game_version = $3,
-		    root_path = $4,
-		    servertap_url = $5,
-		    servertap_key = $6,
-		    servertap_auth_header = $7,
-		    enabled = $8,
-		    updated_at = NOW()
+		UPDATE server_images
+		SET name = $2, game_version = $3
 		WHERE id = $1
-	`, server.ID, server.Name, server.GameVersion, server.RootPath, server.ServerTapURL, server.ServerTapKey, server.ServerTapAuthHeader, server.Enabled)
+	`, image.ID, image.Name, image.GameVersion)
 	return err
 }
 
-func (r *GameServerRepoI) Delete(ctx context.Context, id string) error {
-	_, err := r.connector.ExecContext(ctx, `DELETE FROM game_servers WHERE id = $1`, id)
+func (r *ServerImageRepoI) Delete(ctx context.Context, id string) error {
+	_, err := r.connector.ExecContext(ctx, `DELETE FROM server_images WHERE id = $1`, id)
 	return err
 }
 
@@ -298,10 +246,12 @@ func NewMapInstanceRepoI(connector SQLConnector) *MapInstanceRepoI {
 func (r *MapInstanceRepoI) Create(ctx context.Context, inst MapInstance) (int64, error) {
 	var id int64
 	err := r.connector.QueryRowContext(ctx, `
-		INSERT INTO map_instances (owner_id, template_id, server_id, source_type, game_version, internal_name, alias, status, storage_type, created_at, updated_at, last_active_at, archived_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11)
+		INSERT INTO map_instances (
+			owner_id, template_id, source_type, game_version, status, created_at, updated_at, last_active_at, archived_at
+		)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), $6, $7)
 		RETURNING id
-	`, inst.OwnerID, inst.TemplateID, inst.ServerID, inst.SourceType, inst.GameVersion, inst.InternalName, inst.Alias, inst.Status, inst.StorageType, inst.LastActiveAt, inst.ArchivedAt).Scan(&id)
+	`, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, inst.Status, inst.LastActiveAt, inst.ArchivedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -311,21 +261,20 @@ func (r *MapInstanceRepoI) Create(ctx context.Context, inst MapInstance) (int64,
 func (r *MapInstanceRepoI) Read(ctx context.Context, id int64) (MapInstance, error) {
 	var inst MapInstance
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, owner_id, template_id, server_id, source_type, game_version, internal_name, alias, status, storage_type, created_at, updated_at, last_active_at, archived_at
+		SELECT id, owner_id, template_id, source_type, game_version, status, created_at, updated_at, last_active_at, archived_at
 		FROM map_instances WHERE id = $1
-	`, id).Scan(&inst.ID, &inst.OwnerID, &inst.TemplateID, &inst.ServerID, &inst.SourceType, &inst.GameVersion, &inst.InternalName, &inst.Alias, &inst.Status, &inst.StorageType, &inst.CreatedAt, &inst.UpdatedAt, &inst.LastActiveAt, &inst.ArchivedAt)
-	if err != nil {
-		return MapInstance{}, err
-	}
-	return inst, nil
-}
-
-func (r *MapInstanceRepoI) ReadByAlias(ctx context.Context, alias string) (MapInstance, error) {
-	var inst MapInstance
-	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, owner_id, template_id, server_id, source_type, game_version, internal_name, alias, status, storage_type, created_at, updated_at, last_active_at, archived_at
-		FROM map_instances WHERE alias = $1
-	`, alias).Scan(&inst.ID, &inst.OwnerID, &inst.TemplateID, &inst.ServerID, &inst.SourceType, &inst.GameVersion, &inst.InternalName, &inst.Alias, &inst.Status, &inst.StorageType, &inst.CreatedAt, &inst.UpdatedAt, &inst.LastActiveAt, &inst.ArchivedAt)
+	`, id).Scan(
+		&inst.ID,
+		&inst.OwnerID,
+		&inst.TemplateID,
+		&inst.SourceType,
+		&inst.GameVersion,
+		&inst.Status,
+		&inst.CreatedAt,
+		&inst.UpdatedAt,
+		&inst.LastActiveAt,
+		&inst.ArchivedAt,
+	)
 	if err != nil {
 		return MapInstance{}, err
 	}
@@ -335,9 +284,16 @@ func (r *MapInstanceRepoI) ReadByAlias(ctx context.Context, alias string) (MapIn
 func (r *MapInstanceRepoI) Update(ctx context.Context, inst MapInstance) error {
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE map_instances
-		SET owner_id = $2, template_id = $3, server_id = $4, source_type = $5, game_version = $6, internal_name = $7, alias = $8, status = $9, storage_type = $10, updated_at = NOW(), last_active_at = $11, archived_at = $12
+		SET owner_id = $2,
+		    template_id = $3,
+		    source_type = $4,
+		    game_version = $5,
+		    status = $6,
+		    updated_at = NOW(),
+		    last_active_at = $7,
+		    archived_at = $8
 		WHERE id = $1
-	`, inst.ID, inst.OwnerID, inst.TemplateID, inst.ServerID, inst.SourceType, inst.GameVersion, inst.InternalName, inst.Alias, inst.Status, inst.StorageType, inst.LastActiveAt, inst.ArchivedAt)
+	`, inst.ID, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, inst.Status, inst.LastActiveAt, inst.ArchivedAt)
 	return err
 }
 
@@ -388,96 +344,6 @@ func (r *InstanceMemberRepoI) Update(ctx context.Context, member InstanceMember)
 
 func (r *InstanceMemberRepoI) Delete(ctx context.Context, id int64) error {
 	_, err := r.connector.ExecContext(ctx, `DELETE FROM instance_members WHERE id = $1`, id)
-	return err
-}
-
-type LoadTaskRepoI struct{ connector SQLConnector }
-
-func NewLoadTaskRepoI(connector SQLConnector) *LoadTaskRepoI {
-	return &LoadTaskRepoI{connector: connector}
-}
-
-func (r *LoadTaskRepoI) Create(ctx context.Context, task LoadTask) (int64, error) {
-	var id int64
-	err := r.connector.QueryRowContext(ctx, `
-		INSERT INTO load_tasks (instance_id, status, error_code, error_msg, created_at, started_at, updated_at, finished_at)
-		VALUES ($1, $2, $3, $4, NOW(), $5, NOW(), $6)
-		RETURNING id
-	`, task.InstanceID, task.Status, task.ErrorCode, task.ErrorMsg, task.StartedAt, task.FinishedAt).Scan(&id)
-	if err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
-func (r *LoadTaskRepoI) Read(ctx context.Context, id int64) (LoadTask, error) {
-	var task LoadTask
-	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, instance_id, status, error_code, error_msg, created_at, started_at, updated_at, finished_at
-		FROM load_tasks WHERE id = $1
-	`, id).Scan(&task.ID, &task.InstanceID, &task.Status, &task.ErrorCode, &task.ErrorMsg, &task.CreatedAt, &task.StartedAt, &task.UpdatedAt, &task.FinishedAt)
-	if err != nil {
-		return LoadTask{}, err
-	}
-	return task, nil
-}
-
-func (r *LoadTaskRepoI) Update(ctx context.Context, task LoadTask) error {
-	_, err := r.connector.ExecContext(ctx, `
-		UPDATE load_tasks
-		SET instance_id = $2, status = $3, error_code = $4, error_msg = $5, started_at = $6, updated_at = NOW(), finished_at = $7
-		WHERE id = $1
-	`, task.ID, task.InstanceID, task.Status, task.ErrorCode, task.ErrorMsg, task.StartedAt, task.FinishedAt)
-	return err
-}
-
-func (r *LoadTaskRepoI) Delete(ctx context.Context, id int64) error {
-	_, err := r.connector.ExecContext(ctx, `DELETE FROM load_tasks WHERE id = $1`, id)
-	return err
-}
-
-type AuditLogRepoI struct{ connector SQLConnector }
-
-func NewAuditLogRepoI(connector SQLConnector) *AuditLogRepoI {
-	return &AuditLogRepoI{connector: connector}
-}
-
-func (r *AuditLogRepoI) Create(ctx context.Context, al AuditLog) (int64, error) {
-	var id int64
-	err := r.connector.QueryRowContext(ctx, `
-		INSERT INTO audit_log (actor_user_id, instance_id, action, description, payload_json, created_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
-		RETURNING id
-	`, al.ActorUserID, al.InstanceID, al.Action, al.Description, al.PayloadJSON).Scan(&id)
-	if err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
-func (r *AuditLogRepoI) Read(ctx context.Context, id int64) (AuditLog, error) {
-	var al AuditLog
-	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, actor_user_id, instance_id, action, description, payload_json, created_at
-		FROM audit_log WHERE id = $1
-	`, id).Scan(&al.ID, &al.ActorUserID, &al.InstanceID, &al.Action, &al.Description, &al.PayloadJSON, &al.CreatedAt)
-	if err != nil {
-		return AuditLog{}, err
-	}
-	return al, nil
-}
-
-func (r *AuditLogRepoI) Update(ctx context.Context, al AuditLog) error {
-	_, err := r.connector.ExecContext(ctx, `
-		UPDATE audit_log
-		SET actor_user_id = $2, instance_id = $3, action = $4, description = $5, payload_json = $6
-		WHERE id = $1
-	`, al.ID, al.ActorUserID, al.InstanceID, al.Action, al.Description, al.PayloadJSON)
-	return err
-}
-
-func (r *AuditLogRepoI) Delete(ctx context.Context, id int64) error {
-	_, err := r.connector.ExecContext(ctx, `DELETE FROM audit_log WHERE id = $1`, id)
 	return err
 }
 
@@ -632,12 +498,9 @@ func (r *UserRequestRepoI) MarkRequestResult(
 	return err
 }
 
-var _ SchemaMigrationRepo = (*SchemaMigrationRepoI)(nil)
 var _ UserRepo = (*UserRepoI)(nil)
 var _ MapTemplateRepo = (*MapTemplateRepoI)(nil)
-var _ GameServerRepo = (*GameServerRepoI)(nil)
+var _ ServerImageRepo = (*ServerImageRepoI)(nil)
 var _ MapInstanceRepo = (*MapInstanceRepoI)(nil)
 var _ InstanceMemberRepo = (*InstanceMemberRepoI)(nil)
-var _ LoadTaskRepo = (*LoadTaskRepoI)(nil)
-var _ AuditLogRepo = (*AuditLogRepoI)(nil)
 var _ UserRequestRepo = (*UserRequestRepoI)(nil)

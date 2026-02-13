@@ -63,14 +63,22 @@ func TestRepos_CreateMockData(t *testing.T) {
 		t.Fatalf("create map template failed: %v", err)
 	}
 
+	serverImageID := "s-" + shortHex(3)
+	err = repos.ServerImage.Create(ctx, ServerImage{
+		ID:          serverImageID,
+		Name:        "Repo Test Image",
+		GameVersion: "1.21.1",
+	})
+	if err != nil {
+		t.Fatalf("create server image failed: %v", err)
+	}
+
 	instanceID, err := repos.MapInstance.Create(ctx, MapInstance{
-		OwnerID:      userID,
-		TemplateID:   sql.NullInt64{Int64: templateID, Valid: true},
-		SourceType:   "template",
-		InternalName: "i_repo_test_" + shortHex(3),
-		Alias:        "repo-test-" + shortHex(3),
-		Status:       "REQUESTED",
-		StorageType:  "ssd",
+		OwnerID:     userID,
+		TemplateID:  sql.NullInt64{Int64: templateID, Valid: true},
+		SourceType:  "template",
+		GameVersion: "1.21.1",
+		Status:      "requested",
 	})
 	if err != nil {
 		t.Fatalf("create map instance failed: %v", err)
@@ -83,25 +91,6 @@ func TestRepos_CreateMockData(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create instance member failed: %v", err)
-	}
-
-	taskID, err := repos.LoadTask.Create(ctx, LoadTask{
-		InstanceID: instanceID,
-		Status:     "pending",
-	})
-	if err != nil {
-		t.Fatalf("create load task failed: %v", err)
-	}
-
-	auditID, err := repos.AuditLog.Create(ctx, AuditLog{
-		ActorUserID: sql.NullInt64{Int64: userID, Valid: true},
-		InstanceID:  sql.NullInt64{Int64: instanceID, Valid: true},
-		Action:      "repo.test.insert",
-		Description: "repo_c_test inserted mock row",
-		PayloadJSON: json.RawMessage(`{"test":true}`),
-	})
-	if err != nil {
-		t.Fatalf("create audit log failed: %v", err)
 	}
 
 	requestID := newUUIDLike()
@@ -147,20 +136,23 @@ func TestRepos_CreateMockData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read instance member failed: %v", err)
 	}
-	_, err = repos.LoadTask.Read(ctx, taskID)
+	_, err = repos.ServerImage.Read(ctx, serverImageID)
 	if err != nil {
-		t.Fatalf("read load task failed: %v", err)
+		t.Fatalf("read server image failed: %v", err)
 	}
-	_, err = repos.AuditLog.Read(ctx, auditID)
+	images, err := repos.ServerImage.List(ctx)
 	if err != nil {
-		t.Fatalf("read audit log failed: %v", err)
+		t.Fatalf("list server images failed: %v", err)
+	}
+	if len(images) == 0 {
+		t.Fatalf("expected at least one server image")
 	}
 	_, err = repos.UserRequest.Read(ctx, req.ID)
 	if err != nil {
 		t.Fatalf("read user_request failed: %v", err)
 	}
 
-	t.Logf("mock data inserted: user=%d template=%d instance=%d member=%d task=%d audit=%d request=%d", userID, templateID, instanceID, memberID, taskID, auditID, req.ID)
+	t.Logf("mock data inserted: user=%d template=%d instance=%d member=%d request=%d", userID, templateID, instanceID, memberID, req.ID)
 	t.Logf("check your DB now; rows are kept intentionally")
 	logger.Infof("mock data inserted successfully")
 }
