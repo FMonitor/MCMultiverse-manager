@@ -21,7 +21,7 @@ func TestRepos_CreateMockData(t *testing.T) {
 
 	cfg, err := config.Load()
 	if err != nil {
-		t.Fatalf("load config failed: %v", err)
+		t.Skipf("skip integration test without local config: %v", err)
 	}
 	logger.Infof("config loaded")
 

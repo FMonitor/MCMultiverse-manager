@@ -12,6 +12,7 @@ type UserRepo interface {
 	Create(ctx context.Context, user User) (int64, error)
 	Read(ctx context.Context, id int64) (User, error)
 	ReadByUUID(ctx context.Context, mcUUID string) (User, error)
+	ReadByName(ctx context.Context, mcName string) (User, error)
 	Update(ctx context.Context, user User) error
 	Delete(ctx context.Context, id int64) error
 }
@@ -46,6 +47,7 @@ type InstanceMemberRepo interface {
 	Read(ctx context.Context, id int64) (InstanceMember, error)
 	Update(ctx context.Context, member InstanceMember) error
 	Delete(ctx context.Context, id int64) error
+	DeleteByInstanceAndUser(ctx context.Context, instanceID int64, userID int64) error
 }
 
 type UserRequestRepo interface {

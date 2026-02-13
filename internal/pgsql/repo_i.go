@@ -49,6 +49,18 @@ func (r *UserRepoI) ReadByUUID(ctx context.Context, mcUUID string) (User, error)
 	return user, nil
 }
 
+func (r *UserRepoI) ReadByName(ctx context.Context, mcName string) (User, error) {
+	var user User
+	err := r.connector.QueryRowContext(ctx, `
+		SELECT id, mc_uuid, mc_name, server_role, created_at
+		FROM users WHERE mc_name = $1
+	`, mcName).Scan(&user.ID, &user.MCUUID, &user.MCName, &user.ServerRole, &user.CreatedAt)
+	if err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
 func (r *UserRepoI) Update(ctx context.Context, user User) error {
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE users
@@ -344,6 +356,14 @@ func (r *InstanceMemberRepoI) Update(ctx context.Context, member InstanceMember)
 
 func (r *InstanceMemberRepoI) Delete(ctx context.Context, id int64) error {
 	_, err := r.connector.ExecContext(ctx, `DELETE FROM instance_members WHERE id = $1`, id)
+	return err
+}
+
+func (r *InstanceMemberRepoI) DeleteByInstanceAndUser(ctx context.Context, instanceID int64, userID int64) error {
+	_, err := r.connector.ExecContext(ctx, `
+		DELETE FROM instance_members
+		WHERE instance_id = $1 AND user_id = $2
+	`, instanceID, userID)
 	return err
 }
 
