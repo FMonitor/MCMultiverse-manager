@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class WorldCommandExecutor implements CommandExecutor, TabCompleter {
-    private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("world", "confirm");
+    private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("world", "template", "confirm");
     private static final List<String> WORLD_OPERATIONS = Arrays.asList("add", "remove", "delete");
     private static final long DELETE_CONFIRM_TTL_SECONDS = 30;
 
@@ -51,6 +51,28 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         String root = args[0].toLowerCase(Locale.ROOT);
         if ("confirm".equals(root)) {
             return handleConfirm(player);
+        }
+
+        if ("template".equals(root)) {
+            if (args.length == 2 && "list".equalsIgnoreCase(args[1])) {
+                if (dryRun) {
+                    sender.sendMessage("[MCMM][DryRun] template list requested");
+                    return true;
+                }
+                try {
+                    BackendClient.BackendResponse response = backend.postTemplateList(player.getUniqueId().toString(), player.getName());
+                    player.sendMessage("[MCMM] status=" + response.statusCode());
+                    if (response.body() != null && !response.body().trim().isEmpty()) {
+                        player.sendMessage("[MCMM] " + response.body());
+                    }
+                } catch (IOException e) {
+                    plugin.getLogger().warning("backend request failed: " + e.getMessage());
+                    player.sendMessage("[MCMM] request failed: " + e.getMessage());
+                }
+                return true;
+            }
+            sender.sendMessage("Usage: /mcmm template list");
+            return true;
         }
 
         if (!"world".equals(root) || args.length < 2) {
@@ -155,6 +177,7 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         sender.sendMessage("Usage: /mcmm world <world_alias> add user <user>");
         sender.sendMessage("Usage: /mcmm world <world_alias> remove user <user>");
         sender.sendMessage("Usage: /mcmm world <world_alias> delete");
+        sender.sendMessage("Usage: /mcmm template list");
         sender.sendMessage("Usage: /mcmm confirm");
     }
 
@@ -172,6 +195,9 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         }
         if (args.length == 2 && "world".equalsIgnoreCase(args[0])) {
             return Arrays.asList("create", "<world_alias>");
+        }
+        if (args.length == 2 && "template".equalsIgnoreCase(args[0])) {
+            return Collections.singletonList("list");
         }
         if (args.length == 3 && "world".equalsIgnoreCase(args[0])) {
             return WORLD_OPERATIONS;

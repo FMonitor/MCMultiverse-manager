@@ -33,6 +33,9 @@ func NewWorkerI(repos pgsql.Repos, opts Options) (*WorkerI, error) {
 	if opts.InstanceRootDir == "" || opts.VersionRootDir == "" || opts.ComposeTemplateDir == "" {
 		return nil, errors.New("worker options: required paths must be set")
 	}
+	if opts.ArchiveRootDir == "" {
+		opts.ArchiveRootDir = "deploy/archived"
+	}
 	if opts.DefaultGameVersion == "" {
 		opts.DefaultGameVersion = "1.21.1"
 	}
@@ -58,7 +61,7 @@ func (w *WorkerI) StartFromTemplate(ctx context.Context, instanceID int64, templ
 			version = w.opts.DefaultGameVersion
 		}
 	}
-	return w.runStartFlow(ctx, inst, version, template.BlobPath, StatusPreparingSource)
+	return w.runStartFlow(ctx, inst, version, template.BlobPath)
 }
 
 func (w *WorkerI) StartFromUpload(ctx context.Context, instanceID int64, uploadWorldPath string) error {
@@ -70,7 +73,7 @@ func (w *WorkerI) StartFromUpload(ctx context.Context, instanceID int64, uploadW
 	if version == "" || version == "unknown" {
 		version = w.opts.DefaultGameVersion
 	}
-	return w.runStartFlow(ctx, inst, version, uploadWorldPath, StatusPreparingSource)
+	return w.runStartFlow(ctx, inst, version, uploadWorldPath)
 }
 
 func (w *WorkerI) StartEmpty(ctx context.Context, instanceID int64, gameVersion string) error {
@@ -81,7 +84,7 @@ func (w *WorkerI) StartEmpty(ctx context.Context, instanceID int64, gameVersion 
 	if strings.TrimSpace(gameVersion) == "" {
 		gameVersion = w.opts.DefaultGameVersion
 	}
-	return w.runStartFlow(ctx, inst, gameVersion, "", StatusProvisioning)
+	return w.runStartFlow(ctx, inst, gameVersion, "")
 }
 
 func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
@@ -100,9 +103,6 @@ func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 	if err := w.setStatus(ctx, &inst, StatusOff); err != nil {
 		return err
 	}
-	if err := w.setStatus(ctx, &inst, StatusArchiving); err != nil {
-		return err
-	}
 	if err := w.archiveWorld(inst.ID); err != nil {
 		_ = w.failInstance(ctx, &inst, fmt.Sprintf("archive world: %v", err))
 		return err
@@ -115,18 +115,26 @@ func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 	return nil
 }
 
-func (w *WorkerI) runStartFlow(ctx context.Context, inst pgsql.MapInstance, gameVersion string, sourceWorldPath string, initial Status) error {
-	if err := w.setStatus(ctx, &inst, StatusQueued); err != nil {
-		return err
+func (w *WorkerI) DeleteArchived(ctx context.Context, instanceID int64) error {
+	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("read instance: %w", err)
 	}
-	if err := w.setStatus(ctx, &inst, initial); err != nil {
+	if Status(inst.Status) != StatusArchived {
+		return fmt.Errorf("instance %d is not archived (status=%s)", instanceID, inst.Status)
+	}
+	archiveFile := w.archivePath(instanceID)
+	_ = os.Remove(archiveFile)
+	_ = os.RemoveAll(instanceDir(w.opts.InstanceRootDir, instanceID))
+	return nil
+}
+
+func (w *WorkerI) runStartFlow(ctx context.Context, inst pgsql.MapInstance, gameVersion string, sourceWorldPath string) error {
+	if err := w.setStatus(ctx, &inst, StatusPreparing); err != nil {
 		return err
 	}
 	if err := w.prepareInstanceVolume(inst.ID, sourceWorldPath); err != nil {
 		_ = w.failInstance(ctx, &inst, fmt.Sprintf("prepare instance volume: %v", err))
-		return err
-	}
-	if err := w.setStatus(ctx, &inst, StatusProvisioning); err != nil {
 		return err
 	}
 	if err := w.prepareComposeFile(inst.ID, gameVersion); err != nil {
@@ -153,19 +161,20 @@ func (w *WorkerI) runStartFlow(ctx context.Context, inst pgsql.MapInstance, game
 func (w *WorkerI) setStatus(ctx context.Context, inst *pgsql.MapInstance, to Status) error {
 	from := Status(inst.Status)
 	if inst.Status == "" {
-		from = StatusPendingApproval
+		from = StatusWaiting
 	}
 	if !canTransit(from, to) {
 		return fmt.Errorf("invalid status transition: %s -> %s", from, to)
 	}
 	inst.Status = string(to)
 	inst.UpdatedAt = w.opts.Now()
+	w.logger.Infof("instance=%d status: %s -> %s", inst.ID, from, to)
 	return w.repos.MapInstance.Update(ctx, *inst)
 }
 
 func (w *WorkerI) failInstance(ctx context.Context, inst *pgsql.MapInstance, reason string) error {
 	w.logger.Errorf("instance=%d failed: %s", inst.ID, reason)
-	inst.Status = string(StatusFailed)
+	inst.Status = string(StatusOff)
 	inst.UpdatedAt = w.opts.Now()
 	return w.repos.MapInstance.Update(ctx, *inst)
 }
@@ -187,14 +196,37 @@ func (w *WorkerI) prepareInstanceVolume(instanceID int64, sourceWorldPath string
 	if strings.TrimSpace(sourceWorldPath) == "" {
 		return nil
 	}
-	src := filepath.Clean(sourceWorldPath)
-	if !isDir(src) {
-		return fmt.Errorf("source world path is not dir: %s", src)
+	templateRoot, worldSrc := resolveTemplateWorldPaths(sourceWorldPath)
+	if !isDir(worldSrc) {
+		return fmt.Errorf("source world path is not dir: %s", worldSrc)
 	}
 	if err := clearDir(worldDir); err != nil {
 		return err
 	}
-	return copyDir(src, worldDir)
+	if err := clearDir(netherDir); err != nil {
+		return err
+	}
+	if err := clearDir(endDir); err != nil {
+		return err
+	}
+	if err := copyDir(worldSrc, worldDir); err != nil {
+		return err
+	}
+	// Optional dimensions: some template only has overworld.
+	netherSrc := filepath.Join(templateRoot, "world_nether")
+	if isDir(netherSrc) {
+		if err := copyDir(netherSrc, netherDir); err != nil {
+			return err
+		}
+	}
+	endSrc := filepath.Join(templateRoot, "world_the_end")
+	if isDir(endSrc) {
+		if err := copyDir(endSrc, endDir); err != nil {
+			return err
+		}
+	}
+	w.logger.Infof("instance=%d prepared volume from template=%s", instanceID, templateRoot)
+	return nil
 }
 
 func (w *WorkerI) prepareComposeFile(instanceID int64, version string) error {
@@ -252,26 +284,29 @@ func (w *WorkerI) stopCompose(ctx context.Context, instanceID int64) error {
 func (w *WorkerI) archiveWorld(instanceID int64) error {
 	base := instanceDir(w.opts.InstanceRootDir, instanceID)
 	src := filepath.Join(base, "world")
-	dst := filepath.Join(base, "archive-world.tar.gz")
+	if err := os.MkdirAll(w.opts.ArchiveRootDir, 0o755); err != nil {
+		return err
+	}
+	dst := w.archivePath(instanceID)
 	return tarGzDir(src, dst)
+}
+
+func (w *WorkerI) archivePath(instanceID int64) string {
+	return filepath.Join(w.opts.ArchiveRootDir, fmt.Sprintf("instance-%d.tar.gz", instanceID))
 }
 
 func canTransit(from, to Status) bool {
 	if from == Status("") {
-		from = StatusPendingApproval
+		from = StatusWaiting
 	}
 	allowed := map[Status]map[Status]bool{
-		StatusPendingApproval: {StatusQueued: true, StatusFailed: true},
-		StatusQueued:          {StatusPreparingSource: true, StatusProvisioning: true, StatusFailed: true},
-		StatusPreparingSource: {StatusProvisioning: true, StatusFailed: true},
-		StatusProvisioning:    {StatusStarting: true, StatusFailed: true},
-		StatusStarting:        {StatusOn: true, StatusFailed: true},
-		StatusOn:              {StatusStopping: true, StatusFailed: true},
-		StatusStopping:        {StatusOff: true, StatusFailed: true},
-		StatusOff:             {StatusStarting: true, StatusArchiving: true, StatusFailed: true},
-		StatusArchiving:       {StatusArchived: true, StatusFailed: true},
-		StatusArchived:        {},
-		StatusFailed:          {StatusQueued: true},
+		StatusWaiting:   {StatusPreparing: true},
+		StatusPreparing: {StatusStarting: true, StatusOff: true},
+		StatusStarting:  {StatusOn: true, StatusOff: true},
+		StatusOn:        {StatusStopping: true},
+		StatusStopping:  {StatusOff: true},
+		StatusOff:       {StatusStarting: true, StatusArchived: true},
+		StatusArchived:  {},
 	}
 	if next, ok := allowed[from]; ok {
 		return next[to]
@@ -310,6 +345,29 @@ func instanceDir(root string, id int64) string {
 func instancePorts(id int64) (game int64, tap int64) {
 	// deterministic per instance to reduce collision in local dev.
 	return 30000 + (id % 1000), 31000 + (id % 1000)
+}
+
+func resolveTemplateWorldPaths(input string) (templateRoot string, worldPath string) {
+	clean := filepath.Clean(input)
+	// If caller passes ".../<template>/world", infer template root.
+	if filepath.Base(clean) == "world" {
+		parent := filepath.Dir(clean)
+		if isDir(parent) {
+			return parent, clean
+		}
+	}
+	// If caller passes template root, prefer "<root>/world" when present.
+	candidate := filepath.Join(clean, "world")
+	if isDir(candidate) {
+		return clean, candidate
+	}
+	// Fallback: treat input itself as world dir.
+	return filepath.Dir(clean), clean
+}
+
+func InstanceTapPort(id int64) int64 {
+	_, tap := instancePorts(id)
+	return tap
 }
 
 func runCmd(ctx context.Context, bin string, args ...string) error {

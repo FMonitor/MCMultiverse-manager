@@ -29,6 +29,8 @@ func TestRepos_CreateMockData(t *testing.T) {
 	if override := os.Getenv("TEST_DATABASE_URL"); override != "" {
 		dsn = override
 		logger.Infof("using TEST_DATABASE_URL override")
+	} else {
+		t.Skip("skip integration test unless TEST_DATABASE_URL is set")
 	}
 
 	connector := NewConnector(dsn)
@@ -53,10 +55,7 @@ func TestRepos_CreateMockData(t *testing.T) {
 	templateID, err := repos.MapTemplate.Create(ctx, MapTemplate{
 		Tag:         "repo-test-" + shortHex(4),
 		DisplayName: "Repo Test Template",
-		Version:     "v1",
 		GameVersion: "1.21",
-		SizeBytes:   123456,
-		SHA256Hash:  shortHex(32),
 		BlobPath:    "/data/templates/repo-test.tar.zst",
 	})
 	if err != nil {
@@ -74,11 +73,13 @@ func TestRepos_CreateMockData(t *testing.T) {
 	}
 
 	instanceID, err := repos.MapInstance.Create(ctx, MapInstance{
+		Alias:       "repo-inst-" + shortHex(4),
 		OwnerID:     userID,
 		TemplateID:  sql.NullInt64{Int64: templateID, Valid: true},
 		SourceType:  "template",
 		GameVersion: "1.21.1",
-		Status:      "requested",
+		AccessMode:  "privacy",
+		Status:      "Waiting",
 	})
 	if err != nil {
 		t.Fatalf("create map instance failed: %v", err)

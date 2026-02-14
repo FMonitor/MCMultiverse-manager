@@ -21,6 +21,7 @@ type MapTemplateRepo interface {
 	Create(ctx context.Context, template MapTemplate) (int64, error)
 	Read(ctx context.Context, id int64) (MapTemplate, error)
 	ReadByTag(ctx context.Context, tag string) (MapTemplate, error)
+	List(ctx context.Context) ([]MapTemplate, error)
 	ListByGameVersion(ctx context.Context, gameVersion string) ([]MapTemplate, error)
 	ListGameVersions(ctx context.Context) ([]string, error)
 	Update(ctx context.Context, template MapTemplate) error

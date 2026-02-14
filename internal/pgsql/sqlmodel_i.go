@@ -18,20 +18,19 @@ type MapTemplate struct {
 	ID          int64     `db:"id"`
 	Tag         string    `db:"tag"`
 	DisplayName string    `db:"display_name"`
-	Version     string    `db:"version"`
 	GameVersion string    `db:"game_version"`
-	SizeBytes   int64     `db:"size_bytes"`
-	SHA256Hash  string    `db:"sha256_hash"`
 	BlobPath    string    `db:"blob_path"`
 	CreatedAt   time.Time `db:"created_at"`
 }
 
 type MapInstance struct {
 	ID           int64         `db:"id"`
+	Alias        string        `db:"alias"`
 	OwnerID      int64         `db:"owner_id"`
 	TemplateID   sql.NullInt64 `db:"template_id"`
 	SourceType   string        `db:"source_type"`
 	GameVersion  string        `db:"game_version"`
+	AccessMode   string        `db:"access_mode"`
 	Status       string        `db:"status"`
 	CreatedAt    time.Time     `db:"created_at"`
 	UpdatedAt    time.Time     `db:"updated_at"`
@@ -58,12 +57,17 @@ type UserRequest struct {
 	ID               int64           `db:"id"`
 	RequestID        string          `db:"request_id"`
 	RequestType      string          `db:"request_type"`
-	ActorUserID      sql.NullInt64   `db:"actor_user_id"`
+	ActorUserID      int64           `db:"actor_user_id"`
 	TargetInstanceID sql.NullInt64   `db:"target_instance_id"`
+	TemplateID       sql.NullInt64   `db:"template_id"`
+	RequestedAlias   sql.NullString  `db:"requested_alias"`
 	Status           string          `db:"status"`
+	ReviewedByUserID sql.NullInt64   `db:"reviewed_by_user_id"`
+	ReviewNote       sql.NullString  `db:"review_note"`
 	ResponsePayload  json.RawMessage `db:"response_payload"`
 	ErrorCode        sql.NullString  `db:"error_code"`
 	ErrorMsg         sql.NullString  `db:"error_msg"`
+	ExpiresAt        sql.NullTime    `db:"expires_at"`
 	CreatedAt        time.Time       `db:"created_at"`
 	UpdatedAt        time.Time       `db:"updated_at"`
 }

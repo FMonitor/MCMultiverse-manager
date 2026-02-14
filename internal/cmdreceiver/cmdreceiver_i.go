@@ -108,6 +108,8 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 	switch req.Action {
 	case "create":
 		return s.handleCreate(ctx, req, actor)
+	case "template_list":
+		return s.handleTemplateList(ctx)
 	case "delete":
 		return s.handleDelete(ctx, req, actor)
 	case "member_add":
@@ -117,6 +119,30 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 	default:
 		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "unsupported action"}
 	}
+}
+
+func (s *ServiceI) handleTemplateList(ctx context.Context) (int, WorldCommandResponse) {
+	templates, err := s.repos.MapTemplate.List(ctx)
+	if err != nil {
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "list templates failed"}
+	}
+	if len(templates) == 0 {
+		return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "no templates found"}
+	}
+	limit := len(templates)
+	if limit > 20 {
+		limit = 20
+	}
+	lines := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		t := templates[i]
+		lines = append(lines, fmt.Sprintf("%s (%s)", t.Tag, t.GameVersion))
+	}
+	msg := "templates: " + strings.Join(lines, ", ")
+	if len(templates) > limit {
+		msg += fmt.Sprintf(" ... and %d more", len(templates)-limit)
+	}
+	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: msg}
 }
 
 func (s *ServiceI) handleCreate(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -139,10 +165,12 @@ func (s *ServiceI) handleCreate(ctx context.Context, req WorldCommandRequest, ac
 		version = s.defaultGameVersion
 	}
 	instanceID, err := s.repos.MapInstance.Create(ctx, pgsql.MapInstance{
+		Alias:       req.WorldAlias,
 		OwnerID:     actor.ID,
-		SourceType:  "upload",
+		SourceType:  "empty",
 		GameVersion: version,
-		Status:      string(worker.StatusPendingApproval),
+		AccessMode:  "privacy",
+		Status:      string(worker.StatusWaiting),
 	})
 	if err != nil {
 		_ = s.repos.UserRequest.MarkRequestResult(ctx, req.RequestID, "failed", json.RawMessage(`{"step":"create_instance_row"}`), sql.NullString{String: "db_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})

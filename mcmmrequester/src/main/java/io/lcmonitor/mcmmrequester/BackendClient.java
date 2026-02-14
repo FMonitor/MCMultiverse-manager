@@ -31,6 +31,19 @@ public final class BackendClient {
                 + "&request_id=" + enc(UUID.randomUUID().toString());
 
         HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/v1/cmd/world").openConnection();
+        return doPostForm(conn, form);
+    }
+
+    public BackendResponse postTemplateList(String actorUuid, String actorName) throws IOException {
+        String form = "action=" + enc("template_list")
+                + "&actor_uuid=" + enc(actorUuid)
+                + "&actor_name=" + enc(actorName)
+                + "&request_id=" + enc(UUID.randomUUID().toString());
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/v1/cmd/world").openConnection();
+        return doPostForm(conn, form);
+    }
+
+    private BackendResponse doPostForm(HttpURLConnection conn, String form) throws IOException {
         conn.setRequestMethod("POST");
         conn.setConnectTimeout(timeoutMs);
         conn.setReadTimeout(timeoutMs);

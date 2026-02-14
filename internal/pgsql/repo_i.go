@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"time"
 )
 
 // i-layer implementations.
@@ -84,10 +86,10 @@ func NewMapTemplateRepoI(connector SQLConnector) *MapTemplateRepoI {
 func (r *MapTemplateRepoI) Create(ctx context.Context, template MapTemplate) (int64, error) {
 	var id int64
 	err := r.connector.QueryRowContext(ctx, `
-		INSERT INTO map_templates (tag, display_name, version, game_version, size_bytes, sha256_hash, blob_path, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		INSERT INTO map_templates (tag, display_name, game_version, blob_path, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
 		RETURNING id
-	`, template.Tag, template.DisplayName, template.Version, template.GameVersion, template.SizeBytes, template.SHA256Hash, template.BlobPath).Scan(&id)
+	`, template.Tag, template.DisplayName, template.GameVersion, template.BlobPath).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -97,9 +99,9 @@ func (r *MapTemplateRepoI) Create(ctx context.Context, template MapTemplate) (in
 func (r *MapTemplateRepoI) Read(ctx context.Context, id int64) (MapTemplate, error) {
 	var t MapTemplate
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, tag, display_name, version, game_version, size_bytes, sha256_hash, blob_path, created_at
+		SELECT id, tag, display_name, game_version, blob_path, created_at
 		FROM map_templates WHERE id = $1
-	`, id).Scan(&t.ID, &t.Tag, &t.DisplayName, &t.Version, &t.GameVersion, &t.SizeBytes, &t.SHA256Hash, &t.BlobPath, &t.CreatedAt)
+	`, id).Scan(&t.ID, &t.Tag, &t.DisplayName, &t.GameVersion, &t.BlobPath, &t.CreatedAt)
 	if err != nil {
 		return MapTemplate{}, err
 	}
@@ -109,18 +111,43 @@ func (r *MapTemplateRepoI) Read(ctx context.Context, id int64) (MapTemplate, err
 func (r *MapTemplateRepoI) ReadByTag(ctx context.Context, tag string) (MapTemplate, error) {
 	var t MapTemplate
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, tag, display_name, version, game_version, size_bytes, sha256_hash, blob_path, created_at
+		SELECT id, tag, display_name, game_version, blob_path, created_at
 		FROM map_templates WHERE tag = $1
-	`, tag).Scan(&t.ID, &t.Tag, &t.DisplayName, &t.Version, &t.GameVersion, &t.SizeBytes, &t.SHA256Hash, &t.BlobPath, &t.CreatedAt)
+	`, tag).Scan(&t.ID, &t.Tag, &t.DisplayName, &t.GameVersion, &t.BlobPath, &t.CreatedAt)
 	if err != nil {
 		return MapTemplate{}, err
 	}
 	return t, nil
 }
 
+func (r *MapTemplateRepoI) List(ctx context.Context) ([]MapTemplate, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, tag, display_name, game_version, blob_path, created_at
+		FROM map_templates
+		ORDER BY created_at DESC, id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]MapTemplate, 0)
+	for rows.Next() {
+		var t MapTemplate
+		if err := rows.Scan(&t.ID, &t.Tag, &t.DisplayName, &t.GameVersion, &t.BlobPath, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *MapTemplateRepoI) ListByGameVersion(ctx context.Context, gameVersion string) ([]MapTemplate, error) {
 	rows, err := r.connector.QueryContext(ctx, `
-		SELECT id, tag, display_name, version, game_version, size_bytes, sha256_hash, blob_path, created_at
+		SELECT id, tag, display_name, game_version, blob_path, created_at
 		FROM map_templates
 		WHERE game_version = $1
 		ORDER BY created_at DESC, id DESC
@@ -133,7 +160,7 @@ func (r *MapTemplateRepoI) ListByGameVersion(ctx context.Context, gameVersion st
 	out := make([]MapTemplate, 0)
 	for rows.Next() {
 		var t MapTemplate
-		if err := rows.Scan(&t.ID, &t.Tag, &t.DisplayName, &t.Version, &t.GameVersion, &t.SizeBytes, &t.SHA256Hash, &t.BlobPath, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Tag, &t.DisplayName, &t.GameVersion, &t.BlobPath, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -172,9 +199,9 @@ func (r *MapTemplateRepoI) ListGameVersions(ctx context.Context) ([]string, erro
 func (r *MapTemplateRepoI) Update(ctx context.Context, template MapTemplate) error {
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE map_templates
-		SET tag = $2, display_name = $3, version = $4, game_version = $5, size_bytes = $6, sha256_hash = $7, blob_path = $8
+		SET tag = $2, display_name = $3, game_version = $4, blob_path = $5
 		WHERE id = $1
-	`, template.ID, template.Tag, template.DisplayName, template.Version, template.GameVersion, template.SizeBytes, template.SHA256Hash, template.BlobPath)
+	`, template.ID, template.Tag, template.DisplayName, template.GameVersion, template.BlobPath)
 	return err
 }
 
@@ -256,14 +283,23 @@ func NewMapInstanceRepoI(connector SQLConnector) *MapInstanceRepoI {
 }
 
 func (r *MapInstanceRepoI) Create(ctx context.Context, inst MapInstance) (int64, error) {
+	alias := inst.Alias
+	if alias == "" {
+		alias = fmt.Sprintf("inst-%d", time.Now().UnixNano())
+	}
+	accessMode := inst.AccessMode
+	if accessMode == "" {
+		accessMode = "privacy"
+	}
 	var id int64
 	err := r.connector.QueryRowContext(ctx, `
 		INSERT INTO map_instances (
-			owner_id, template_id, source_type, game_version, status, created_at, updated_at, last_active_at, archived_at
+			alias, owner_id, template_id, source_type, game_version, access_mode, status,
+			created_at, updated_at, last_active_at, archived_at
 		)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), $6, $7)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), $8, $9)
 		RETURNING id
-	`, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, inst.Status, inst.LastActiveAt, inst.ArchivedAt).Scan(&id)
+	`, alias, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, accessMode, inst.Status, inst.LastActiveAt, inst.ArchivedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -273,14 +309,16 @@ func (r *MapInstanceRepoI) Create(ctx context.Context, inst MapInstance) (int64,
 func (r *MapInstanceRepoI) Read(ctx context.Context, id int64) (MapInstance, error) {
 	var inst MapInstance
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, owner_id, template_id, source_type, game_version, status, created_at, updated_at, last_active_at, archived_at
+		SELECT id, alias, owner_id, template_id, source_type, game_version, access_mode, status, created_at, updated_at, last_active_at, archived_at
 		FROM map_instances WHERE id = $1
 	`, id).Scan(
 		&inst.ID,
+		&inst.Alias,
 		&inst.OwnerID,
 		&inst.TemplateID,
 		&inst.SourceType,
 		&inst.GameVersion,
+		&inst.AccessMode,
 		&inst.Status,
 		&inst.CreatedAt,
 		&inst.UpdatedAt,
@@ -294,18 +332,24 @@ func (r *MapInstanceRepoI) Read(ctx context.Context, id int64) (MapInstance, err
 }
 
 func (r *MapInstanceRepoI) Update(ctx context.Context, inst MapInstance) error {
+	accessMode := inst.AccessMode
+	if accessMode == "" {
+		accessMode = "privacy"
+	}
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE map_instances
-		SET owner_id = $2,
-		    template_id = $3,
-		    source_type = $4,
-		    game_version = $5,
-		    status = $6,
+		SET alias = $2,
+		    owner_id = $3,
+		    template_id = $4,
+		    source_type = $5,
+		    game_version = $6,
+		    access_mode = $7,
+		    status = $8,
 		    updated_at = NOW(),
-		    last_active_at = $7,
-		    archived_at = $8
+		    last_active_at = $9,
+		    archived_at = $10
 		WHERE id = $1
-	`, inst.ID, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, inst.Status, inst.LastActiveAt, inst.ArchivedAt)
+	`, inst.ID, inst.Alias, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, accessMode, inst.Status, inst.LastActiveAt, inst.ArchivedAt)
 	return err
 }
 
@@ -377,12 +421,14 @@ func (r *UserRequestRepoI) Create(ctx context.Context, req UserRequest) (int64, 
 	var id int64
 	err := r.connector.QueryRowContext(ctx, `
 		INSERT INTO user_requests (
-			request_id, request_type, actor_user_id, target_instance_id, status,
-			response_payload, error_code, error_msg, created_at, updated_at
+			request_id, request_type, actor_user_id, target_instance_id, template_id,
+			requested_alias, status, reviewed_by_user_id, review_note, response_payload,
+			error_code, error_msg, expires_at, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
 		RETURNING id
-	`, req.RequestID, req.RequestType, req.ActorUserID, req.TargetInstanceID, req.Status, req.ResponsePayload, req.ErrorCode, req.ErrorMsg).Scan(&id)
+	`, req.RequestID, req.RequestType, req.ActorUserID, req.TargetInstanceID, req.TemplateID, req.RequestedAlias,
+		req.Status, req.ReviewedByUserID, req.ReviewNote, req.ResponsePayload, req.ErrorCode, req.ErrorMsg, req.ExpiresAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -392,8 +438,9 @@ func (r *UserRequestRepoI) Create(ctx context.Context, req UserRequest) (int64, 
 func (r *UserRequestRepoI) Read(ctx context.Context, id int64) (UserRequest, error) {
 	var req UserRequest
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, request_id, request_type, actor_user_id, target_instance_id, status,
-		       response_payload, error_code, error_msg, created_at, updated_at
+		SELECT id, request_id, request_type, actor_user_id, target_instance_id, template_id,
+		       requested_alias, status, reviewed_by_user_id, review_note, response_payload,
+		       error_code, error_msg, expires_at, created_at, updated_at
 		FROM user_requests WHERE id = $1
 	`, id).Scan(
 		&req.ID,
@@ -401,10 +448,15 @@ func (r *UserRequestRepoI) Read(ctx context.Context, id int64) (UserRequest, err
 		&req.RequestType,
 		&req.ActorUserID,
 		&req.TargetInstanceID,
+		&req.TemplateID,
+		&req.RequestedAlias,
 		&req.Status,
+		&req.ReviewedByUserID,
+		&req.ReviewNote,
 		&req.ResponsePayload,
 		&req.ErrorCode,
 		&req.ErrorMsg,
+		&req.ExpiresAt,
 		&req.CreatedAt,
 		&req.UpdatedAt,
 	)
@@ -417,8 +469,9 @@ func (r *UserRequestRepoI) Read(ctx context.Context, id int64) (UserRequest, err
 func (r *UserRequestRepoI) ReadByRequestID(ctx context.Context, requestID string) (UserRequest, error) {
 	var req UserRequest
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, request_id, request_type, actor_user_id, target_instance_id, status,
-		       response_payload, error_code, error_msg, created_at, updated_at
+		SELECT id, request_id, request_type, actor_user_id, target_instance_id, template_id,
+		       requested_alias, status, reviewed_by_user_id, review_note, response_payload,
+		       error_code, error_msg, expires_at, created_at, updated_at
 		FROM user_requests WHERE request_id = $1
 	`, requestID).Scan(
 		&req.ID,
@@ -426,10 +479,15 @@ func (r *UserRequestRepoI) ReadByRequestID(ctx context.Context, requestID string
 		&req.RequestType,
 		&req.ActorUserID,
 		&req.TargetInstanceID,
+		&req.TemplateID,
+		&req.RequestedAlias,
 		&req.Status,
+		&req.ReviewedByUserID,
+		&req.ReviewNote,
 		&req.ResponsePayload,
 		&req.ErrorCode,
 		&req.ErrorMsg,
+		&req.ExpiresAt,
 		&req.CreatedAt,
 		&req.UpdatedAt,
 	)
@@ -445,13 +503,19 @@ func (r *UserRequestRepoI) Update(ctx context.Context, req UserRequest) error {
 		SET request_type = $2,
 		    actor_user_id = $3,
 		    target_instance_id = $4,
-		    status = $5,
-		    response_payload = $6,
-		    error_code = $7,
-		    error_msg = $8,
+		    template_id = $5,
+		    requested_alias = $6,
+		    status = $7,
+		    reviewed_by_user_id = $8,
+		    review_note = $9,
+		    response_payload = $10,
+		    error_code = $11,
+		    error_msg = $12,
+		    expires_at = $13,
 		    updated_at = NOW()
 		WHERE id = $1
-	`, req.ID, req.RequestType, req.ActorUserID, req.TargetInstanceID, req.Status, req.ResponsePayload, req.ErrorCode, req.ErrorMsg)
+	`, req.ID, req.RequestType, req.ActorUserID, req.TargetInstanceID, req.TemplateID, req.RequestedAlias,
+		req.Status, req.ReviewedByUserID, req.ReviewNote, req.ResponsePayload, req.ErrorCode, req.ErrorMsg, req.ExpiresAt)
 	return err
 }
 
@@ -470,13 +534,13 @@ func (r *UserRequestRepoI) CreateAcceptedIfNotExists(
 	var id int64
 	err := r.connector.QueryRowContext(ctx, `
 		INSERT INTO user_requests (
-			request_id, request_type, actor_user_id, target_instance_id, status,
-			response_payload, created_at, updated_at
+			request_id, request_type, actor_user_id, target_instance_id, status, response_payload,
+			created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, 'accepted', $5, NOW(), NOW())
 		ON CONFLICT (request_id) DO NOTHING
 		RETURNING id
-	`, requestID, requestType, actorUserID, targetInstanceID, json.RawMessage(`{}`)).Scan(&id)
+	`, requestID, requestType, actorUserID.Int64, targetInstanceID, json.RawMessage(`{}`)).Scan(&id)
 	if err == sql.ErrNoRows {
 		existing, readErr := r.ReadByRequestID(ctx, requestID)
 		if readErr != nil {

@@ -1,6 +1,6 @@
 # Data Objects (PostgreSQL)
 
-本文档与 `deploy/init.sql` 一致。
+本文档用于对齐当前“插件命令驱动”方案，并作为 `deploy/init.sql` 的目标结构。
 
 ## 1. `users`
 
@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | `id` | `BIGSERIAL` | PK | 用户主键。 |
 | `mc_uuid` | `UUID` | `NOT NULL UNIQUE` | Minecraft UUID。 |
-| `mc_name` | `TEXT` | `NOT NULL` | 玩家名。 |
+| `mc_name` | `TEXT` | `NOT NULL UNIQUE` | 玩家名（按当前唯一名处理）。 |
 | `server_role` | `TEXT` | `NOT NULL DEFAULT 'user'` | 服务器级角色（`user/admin`）。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 创建时间。 |
 
@@ -17,37 +17,45 @@
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `id` | `BIGSERIAL` | PK | 模板主键。 |
-| `tag` | `TEXT` | `NOT NULL UNIQUE` | 模板标识。 |
+| `tag` | `TEXT` | `NOT NULL UNIQUE` | 模板标识（命令里 `<template name>`）。 |
 | `display_name` | `TEXT` | `NOT NULL` | 展示名。 |
-| `version` | `TEXT` | `NOT NULL` | 模板版本。 |
-| `game_version` | `TEXT` | `NOT NULL` | MC 版本。 |
-| `size_bytes` | `BIGINT` | `NOT NULL CHECK(size_bytes >= 0)` | 包大小。 |
-| `sha256_hash` | `TEXT` | `NOT NULL` | 内容哈希。 |
-| `blob_path` | `TEXT` | `NOT NULL` | 存储路径。 |
+| `game_version` | `TEXT` | `NOT NULL` | MC 版本（如 `1.16.5`）。 |
+| `blob_path` | `TEXT` | `NOT NULL` | 模板路径。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 创建时间。 |
 
 ## 3. `server_images`
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
-| `id` | `TEXT` | PK | 服务端唯一标识（如 `s1`）。 |
+| `id` | `TEXT` | PK | 运行时镜像标识（如 `runtime-java17`）。 |
 | `name` | `TEXT` | `NOT NULL` | 展示名。 |
-| `game_version` | `TEXT` | `NOT NULL` | 服务端 Minecraft 版本。 |
+| `game_version` | `TEXT` | `NOT NULL` | 对应 MC 版本。 |
 
 ## 4. `map_instances`
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `id` | `BIGSERIAL` | PK | 实例主键。 |
+| `alias` | `TEXT` | `NOT NULL UNIQUE` | 世界别名（玩家看到的世界名）。 |
 | `owner_id` | `BIGINT` | `NOT NULL FK -> users(id)` | 所有者。 |
 | `template_id` | `BIGINT` | 可空 FK -> map_templates(id) | 来源模板。 |
-| `source_type` | `TEXT` | `NOT NULL` | 来源（`template/upload`）。 |
-| `game_version` | `TEXT` | `NOT NULL DEFAULT 'unknown'` | 当前实例目标 MC 版本。 |
-| `status` | `TEXT` | `NOT NULL` | 状态机状态（可含 `archived`）。 |
+| `source_type` | `TEXT` | `NOT NULL` | 来源（`template/upload/empty`）。 |
+| `game_version` | `TEXT` | `NOT NULL` | 目标 MC 版本。 |
+| `access_mode` | `TEXT` | `NOT NULL DEFAULT 'privacy'` | 访问模式（`privacy/public`）。 |
+| `status` | `TEXT` | `NOT NULL` | 状态机状态。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 创建时间。 |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 最近更新时间。 |
 | `last_active_at` | `TIMESTAMPTZ` | 可空 | 最近活跃时间。 |
 | `archived_at` | `TIMESTAMPTZ` | 可空 | 归档时间。 |
+
+状态机固定为 7 个：
+- `Waiting`
+- `Preparing`
+- `Starting`
+- `On`
+- `Stopping`
+- `Off`
+- `Archived`
 
 ## 5. `instance_members`
 
@@ -59,29 +67,36 @@
 | `role` | `TEXT` | `NOT NULL` | 成员角色（`owner/member`）。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 创建时间。 |
 
-补充：`UNIQUE(instance_id, user_id)`。
+补充：
+- `UNIQUE(instance_id, user_id)`。
+- `public` 世界可允许非白名单进入，但白名单仍保留（用于切换回 `privacy`）。
 
-## 6. `user_requests` (Idempotency)
+## 6. `user_requests`
 
-`user_requests` 是幂等请求表，名字保持简短。
+`user_requests` 统一承载“申请、审批、取消、幂等”。
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `id` | `BIGSERIAL` | PK | 记录主键。 |
-| `request_id` | `UUID` | `NOT NULL UNIQUE` | 幂等键。 |
-| `request_type` | `TEXT` | `NOT NULL` | 请求类型（`create_instance/delete_instance/archive_instance/restore_instance`）。 |
-| `actor_user_id` | `BIGINT` | 可空 FK -> users(id) | 发起用户。 |
+| `request_id` | `UUID` | `NOT NULL UNIQUE` | 对外请求号（命令回显给玩家）。 |
+| `request_type` | `TEXT` | `NOT NULL` | 请求类型（`world_create/world_remove/member_add/member_remove` 等）。 |
+| `actor_user_id` | `BIGINT` | `NOT NULL FK -> users(id)` | 发起用户。 |
 | `target_instance_id` | `BIGINT` | 可空 FK -> map_instances(id) | 目标实例。 |
-| `status` | `TEXT` | `NOT NULL` | 处理状态（`accepted/processing/succeeded/failed`）。 |
-| `response_payload` | `JSONB` | `NOT NULL DEFAULT '{}'` | 成功或失败响应快照。 |
+| `template_id` | `BIGINT` | 可空 FK -> map_templates(id) | 申请创建时的模板。 |
+| `requested_alias` | `TEXT` | 可空 | 申请创建时请求的世界名。 |
+| `status` | `TEXT` | `NOT NULL` | `pending/approved/rejected/canceled/processing/succeeded/failed`。 |
+| `reviewed_by_user_id` | `BIGINT` | 可空 FK -> users(id) | 审批人。 |
+| `review_note` | `TEXT` | 可空 | 拒绝/取消原因。 |
+| `response_payload` | `JSONB` | `NOT NULL DEFAULT '{}'` | 返回快照（例如实例 id）。 |
 | `error_code` | `TEXT` | 可空 | 错误码。 |
 | `error_msg` | `TEXT` | 可空 | 错误信息。 |
+| `expires_at` | `TIMESTAMPTZ` | 可空 | 申请超时（可选）。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 创建时间。 |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 更新时间。 |
 
-补充：`id` 与 `request_id` 不重复语义。
-- `id`：数据库内部主键（自增，便于 join/排序）。
-- `request_id`：业务幂等键（客户端传入或后端生成，要求唯一）。
+说明：
+- `id` 是内部主键。
+- `request_id` 是对外可见请求号。
 
 ## 7. Go Mapping
 

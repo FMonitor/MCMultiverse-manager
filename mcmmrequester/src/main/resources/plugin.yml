@@ -6,7 +6,7 @@ authors: [LCMonitor]
 commands:
   mcmm:
     description: MCMM command entrypoint
-    usage: "/mcmm world <create|<alias> add/remove user <user>|<alias> delete> | /mcmm confirm"
+    usage: "/mcmm world <create|<alias> add/remove user <user>|<alias> delete> | /mcmm template list | /mcmm confirm"
     permission: mcmmrequester.use
 permissions:
   mcmmrequester.use:

@@ -17,6 +17,12 @@ type Config struct {
 	ServerTap           string         `yaml:"servertap_url"`
 	ServerTapKey        string         `yaml:"servertap_key"`
 	ServerTapAuthHeader string         `yaml:"servertap_auth_header"`
+	TemplateRootPath    string         `yaml:"template_root_path"`
+	VersionRootPath     string         `yaml:"version_root_path"`
+	InstanceRootPath    string         `yaml:"instance_root_path"`
+	ArchiveRootPath     string         `yaml:"archive_root_path"`
+	BootstrapAdminName  string         `yaml:"bootstrap_admin_name"`
+	BootstrapAdminUUID  string         `yaml:"bootstrap_admin_uuid"`
 	ServerPath          string         `yaml:"serverpath"`
 	Servers             []ServerConfig `yaml:"servers"`
 }
@@ -69,12 +75,30 @@ func LoadFromFile(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c Config) Validate() error {
+func (c *Config) Validate() error {
 	if c.HTTPAddr == "" {
 		return errors.New("http_addr is required")
 	}
 	if c.DBURL == "" {
 		return errors.New("database_url is required")
+	}
+	if c.VersionRootPath == "" {
+		c.VersionRootPath = "deploy/version"
+	}
+	if c.TemplateRootPath == "" {
+		c.TemplateRootPath = "deploy/template"
+	}
+	if c.InstanceRootPath == "" {
+		c.InstanceRootPath = "deploy/instance"
+	}
+	if c.ArchiveRootPath == "" {
+		c.ArchiveRootPath = "deploy/archived"
+	}
+	if c.BootstrapAdminName == "" {
+		c.BootstrapAdminName = "admin"
+	}
+	if c.BootstrapAdminUUID == "" {
+		c.BootstrapAdminUUID = "00000000-0000-4000-8000-000000000001"
 	}
 	if len(c.Servers) == 0 && c.ServerTap == "" {
 		return errors.New("servertap_url is required when servers is empty")
@@ -94,6 +118,19 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func LogSummary(cfg Config) {
+	logger := ilog.Component("config")
+	logger.Infof("runtime paths: template=%s version=%s instance=%s archive=%s", cfg.TemplateRootPath, cfg.VersionRootPath, cfg.InstanceRootPath, cfg.ArchiveRootPath)
+	if cfg.ServerTapAuthHeader == "" {
+		logger.Warnf("servertap_auth_header is empty, fallback should be 'key'")
+	} else {
+		logger.Infof("servertap auth_header=%s", cfg.ServerTapAuthHeader)
+	}
+	if cfg.ServerTapKey == "" {
+		logger.Warnf("servertap_key is empty")
+	}
 }
 
 func resolveDefaultConfigPath() string {

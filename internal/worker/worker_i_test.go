@@ -55,14 +55,14 @@ func TestRuntimeImageByVersion(t *testing.T) {
 }
 
 func TestCanTransit(t *testing.T) {
-	if !canTransit(StatusPendingApproval, StatusQueued) {
-		t.Fatalf("pending_approval -> queued should be allowed")
+	if !canTransit(StatusWaiting, StatusPreparing) {
+		t.Fatalf("Waiting -> Preparing should be allowed")
 	}
 	if canTransit(StatusOn, StatusArchived) {
-		t.Fatalf("on -> archived should not be allowed")
+		t.Fatalf("On -> Archived should not be allowed")
 	}
-	if !canTransit(StatusOff, StatusArchiving) {
-		t.Fatalf("off -> archiving should be allowed")
+	if !canTransit(StatusOff, StatusArchived) {
+		t.Fatalf("Off -> Archived should be allowed")
 	}
 }
 
@@ -138,16 +138,75 @@ func TestSetStatusWithMockRepo(t *testing.T) {
 
 	inst := pgsql.MapInstance{
 		ID:         1,
-		Status:     string(StatusQueued),
+		Status:     string(StatusWaiting),
 		TemplateID: sql.NullInt64{},
 	}
-	if err := w.setStatus(context.Background(), &inst, StatusProvisioning); err != nil {
+	if err := w.setStatus(context.Background(), &inst, StatusPreparing); err != nil {
 		t.Fatalf("set status failed: %v", err)
 	}
-	if updated.Status != string(StatusProvisioning) {
+	if updated.Status != string(StatusPreparing) {
 		t.Fatalf("updated status mismatch: got=%s", updated.Status)
 	}
 	if !updated.UpdatedAt.Equal(now) {
 		t.Fatalf("updated_at mismatch: got=%v want=%v", updated.UpdatedAt, now)
 	}
+}
+
+func TestResolveTemplateWorldPaths(t *testing.T) {
+	root, world := resolveTemplateWorldPaths("deploy/template/test1/world")
+	if root != filepath.Clean("deploy/template/test1") {
+		t.Fatalf("unexpected root=%s", root)
+	}
+	if world != filepath.Clean("deploy/template/test1/world") {
+		t.Fatalf("unexpected world=%s", world)
+	}
+}
+
+func TestPrepareInstanceVolume_WorldOnlyTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	templateRoot := filepath.Join(tmp, "template", "test1")
+	templateWorld := filepath.Join(templateRoot, "world")
+	if err := os.MkdirAll(templateWorld, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(templateWorld, "level.dat"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var updated pgsql.MapInstance
+	repos := pgsql.Repos{
+		MapInstance: mapInstanceRepoMock{
+			readFn: func(ctx context.Context, id int64) (pgsql.MapInstance, error) {
+				return pgsql.MapInstance{ID: id, Status: string(StatusPreparing)}, nil
+			},
+			updateFn: func(ctx context.Context, inst pgsql.MapInstance) error {
+				updated = inst
+				return nil
+			},
+		},
+	}
+	w, err := NewWorkerI(repos, Options{
+		InstanceRootDir:    filepath.Join(tmp, "instance"),
+		VersionRootDir:     filepath.Join(tmp, "version"),
+		ComposeTemplateDir: filepath.Join(tmp, "compose"),
+		Now:                time.Now,
+	})
+	if err != nil {
+		t.Fatalf("new worker failed: %v", err)
+	}
+	if err := w.prepareInstanceVolume(42, templateWorld); err != nil {
+		t.Fatalf("prepare volume failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmp, "instance", "42", "world", "level.dat")); err != nil {
+		t.Fatalf("world copy missing: %v", err)
+	}
+	// nether/end are optional and should stay empty dirs.
+	if _, err := os.Stat(filepath.Join(tmp, "instance", "42", "world_nether")); err != nil {
+		t.Fatalf("world_nether dir missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "instance", "42", "world_the_end")); err != nil {
+		t.Fatalf("world_the_end dir missing: %v", err)
+	}
+	_ = updated
 }
