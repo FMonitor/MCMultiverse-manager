@@ -43,6 +43,9 @@
 | `game_version` | `TEXT` | `NOT NULL` | 目标 MC 版本。 |
 | `access_mode` | `TEXT` | `NOT NULL DEFAULT 'privacy'` | 访问模式（`privacy/public`）。 |
 | `status` | `TEXT` | `NOT NULL` | 状态机状态。 |
+| `health_status` | `TEXT` | `NOT NULL DEFAULT 'unknown'` | 健康状态（`unknown/healthy/start_failed/unreachable`）。 |
+| `last_error_msg` | `TEXT` | 可空 | 最近一次失败原因。 |
+| `last_health_at` | `TIMESTAMPTZ` | 可空 | 最近一次健康结果写入时间。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 创建时间。 |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | 最近更新时间。 |
 | `last_active_at` | `TIMESTAMPTZ` | 可空 | 最近活跃时间。 |
@@ -56,6 +59,12 @@
 - `Stopping`
 - `Off`
 - `Archived`
+
+健康状态：
+- `unknown`：尚未做过有效健康判定。
+- `healthy`：容器启动并完成 ServerTap 初始化。
+- `start_failed`：容器或启动流程失败。
+- `unreachable`：容器已尝试启动，但 ServerTap 不可达/超时。
 
 ## 5. `instance_members`
 

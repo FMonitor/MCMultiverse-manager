@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	ilog "mcmm/internal/log"
 
@@ -15,8 +16,12 @@ type Config struct {
 	HTTPAddr            string         `yaml:"http_addr"`
 	DBURL               string         `yaml:"database_url"`
 	ServerTap           string         `yaml:"servertap_url"`
+	LobbyServerTapURL   string         `yaml:"lobby_servertap_url"`
 	ServerTapKey        string         `yaml:"servertap_key"`
 	ServerTapAuthHeader string         `yaml:"servertap_auth_header"`
+	MiniServerTapPort   int            `yaml:"mini_servertap_port"`
+	MiniTapHostPattern  string         `yaml:"mini_servertap_host_pattern"`
+	InstanceNetwork     string         `yaml:"instance_network"`
 	TemplateRootPath    string         `yaml:"template_root_path"`
 	VersionRootPath     string         `yaml:"version_root_path"`
 	InstanceRootPath    string         `yaml:"instance_root_path"`
@@ -100,8 +105,23 @@ func (c *Config) Validate() error {
 	if c.BootstrapAdminUUID == "" {
 		c.BootstrapAdminUUID = "00000000-0000-4000-8000-000000000001"
 	}
-	if len(c.Servers) == 0 && c.ServerTap == "" {
-		return errors.New("servertap_url is required when servers is empty")
+	if c.LobbyServerTapURL == "" {
+		c.LobbyServerTapURL = c.ServerTap
+	}
+	if c.ServerTap == "" {
+		c.ServerTap = c.LobbyServerTapURL
+	}
+	if c.MiniServerTapPort <= 0 {
+		c.MiniServerTapPort = 4567
+	}
+	if c.MiniTapHostPattern == "" {
+		c.MiniTapHostPattern = fmt.Sprintf("http://mcmm-inst-%%d:%d", c.MiniServerTapPort)
+	}
+	if c.InstanceNetwork == "" {
+		c.InstanceNetwork = "mcmm-network"
+	}
+	if len(c.Servers) == 0 && c.ServerTap == "" && c.LobbyServerTapURL == "" {
+		return errors.New("lobby_servertap_url (or servertap_url) is required when servers is empty")
 	}
 	for i, s := range c.Servers {
 		if s.ID == "" {
@@ -123,6 +143,7 @@ func (c *Config) Validate() error {
 func LogSummary(cfg Config) {
 	logger := ilog.Component("config")
 	logger.Infof("runtime paths: template=%s version=%s instance=%s archive=%s", cfg.TemplateRootPath, cfg.VersionRootPath, cfg.InstanceRootPath, cfg.ArchiveRootPath)
+	logger.Infof("servertap lobby=%s mini_pattern=%s instance_network=%s", cfg.LobbyServerTapURL, cfg.MiniTapHostPattern, cfg.InstanceNetwork)
 	if cfg.ServerTapAuthHeader == "" {
 		logger.Warnf("servertap_auth_header is empty, fallback should be 'key'")
 	} else {
@@ -131,6 +152,14 @@ func LogSummary(cfg Config) {
 	if cfg.ServerTapKey == "" {
 		logger.Warnf("servertap_key is empty")
 	}
+}
+
+func (c Config) MiniServerTapURL(instanceID int64) string {
+	pattern := strings.TrimSpace(c.MiniTapHostPattern)
+	if pattern == "" {
+		return fmt.Sprintf("http://127.0.0.1:%d", c.MiniServerTapPort)
+	}
+	return fmt.Sprintf(pattern, instanceID)
 }
 
 func resolveDefaultConfigPath() string {

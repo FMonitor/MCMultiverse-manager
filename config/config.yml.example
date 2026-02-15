@@ -1,8 +1,12 @@
-http_addr: ":12345"
-database_url: "postgres://"
-servertap_url: "http://"
+http_addr: ":8080"
+database_url: "postgres://mcmm:mcmm@db:5432/mcmmdb?sslmode=disable"
+lobby_servertap_url: "http://127.0.0.1:4567"
+servertap_url: "http://127.0.0.1:4567" # legacy fallback, keep same as lobby_servertap_url
 servertap_key: ""
 servertap_auth_header: "key"
+mini_servertap_port: 4567
+mini_servertap_host_pattern: "http://mcmm-inst-%d:4567"
+instance_network: "mcmm-network"
 template_root_path: "deploy/template"
 version_root_path: "deploy/version"
 instance_root_path: "deploy/instance"

@@ -27,15 +27,28 @@ const (
 	StatusArchived  Status = "Archived"
 )
 
+type HealthStatus string
+
+const (
+	HealthUnknown     HealthStatus = "unknown"
+	HealthHealthy     HealthStatus = "healthy"
+	HealthStartFailed HealthStatus = "start_failed"
+	HealthUnreachable HealthStatus = "unreachable"
+)
+
 // Options are fixed deployment inputs for worker runtime.
 type Options struct {
-	InstanceRootDir    string
-	VersionRootDir     string
-	ComposeTemplateDir string
-	ArchiveRootDir     string
-	DefaultGameVersion string
-	ServerTapPort      int
-	ServerTapAuthKey   string
-	ServerTapAuthName  string
-	Now                func() time.Time
+	InstanceRootDir       string
+	VersionRootDir        string
+	ComposeTemplateDir    string
+	ArchiveRootDir        string
+	DefaultGameVersion    string
+	ServerTapPort         int
+	ServerTapTimeout      time.Duration
+	InstanceNetwork       string
+	InstanceTapURLPattern string
+	ServerTapAuthKey      string
+	ServerTapAuthName     string
+	BootstrapAdminName    string
+	Now                   func() time.Time
 }

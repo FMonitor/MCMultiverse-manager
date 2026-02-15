@@ -23,6 +23,15 @@ func (m mapInstanceRepoMock) Create(ctx context.Context, inst pgsql.MapInstance)
 func (m mapInstanceRepoMock) Read(ctx context.Context, id int64) (pgsql.MapInstance, error) {
 	return m.readFn(ctx, id)
 }
+func (m mapInstanceRepoMock) ReadByAlias(ctx context.Context, alias string) (pgsql.MapInstance, error) {
+	return pgsql.MapInstance{}, nil
+}
+func (m mapInstanceRepoMock) ListByOwner(ctx context.Context, ownerID int64) ([]pgsql.MapInstance, error) {
+	return nil, nil
+}
+func (m mapInstanceRepoMock) List(ctx context.Context) ([]pgsql.MapInstance, error) {
+	return nil, nil
+}
 func (m mapInstanceRepoMock) Update(ctx context.Context, inst pgsql.MapInstance) error {
 	return m.updateFn(ctx, inst)
 }

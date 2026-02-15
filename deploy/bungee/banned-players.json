@@ -1,0 +1,10 @@
+[
+  {
+    "uuid": "8358919a-cf0f-316b-8dee-df975decb1a5",
+    "name": "CS-CoreLib",
+    "created": "2025-09-24 22:48:58 +0800",
+    "source": "CnUsername",
+    "expires": "forever",
+    "reason": "Invalid username"
+  }
+]

@@ -24,24 +24,38 @@ type MapTemplate struct {
 }
 
 type MapInstance struct {
-	ID           int64         `db:"id"`
-	Alias        string        `db:"alias"`
-	OwnerID      int64         `db:"owner_id"`
-	TemplateID   sql.NullInt64 `db:"template_id"`
-	SourceType   string        `db:"source_type"`
-	GameVersion  string        `db:"game_version"`
-	AccessMode   string        `db:"access_mode"`
-	Status       string        `db:"status"`
-	CreatedAt    time.Time     `db:"created_at"`
-	UpdatedAt    time.Time     `db:"updated_at"`
-	LastActiveAt sql.NullTime  `db:"last_active_at"`
-	ArchivedAt   sql.NullTime  `db:"archived_at"`
+	ID           int64          `db:"id"`
+	Alias        string         `db:"alias"`
+	OwnerID      int64          `db:"owner_id"`
+	TemplateID   sql.NullInt64  `db:"template_id"`
+	SourceType   string         `db:"source_type"`
+	GameVersion  string         `db:"game_version"`
+	AccessMode   string         `db:"access_mode"`
+	Status       string         `db:"status"`
+	HealthStatus string         `db:"health_status"`
+	LastErrorMsg sql.NullString `db:"last_error_msg"`
+	LastHealthAt sql.NullTime   `db:"last_health_at"`
+	CreatedAt    time.Time      `db:"created_at"`
+	UpdatedAt    time.Time      `db:"updated_at"`
+	LastActiveAt sql.NullTime   `db:"last_active_at"`
+	ArchivedAt   sql.NullTime   `db:"archived_at"`
 }
 
 type ServerImage struct {
 	ID          string `db:"id"`
 	Name        string `db:"name"`
 	GameVersion string `db:"game_version"`
+}
+
+type GameVersion struct {
+	GameVersion    string         `db:"game_version"`
+	RuntimeImageID sql.NullString `db:"runtime_image_id"`
+	CoreJar        string         `db:"core_jar"`
+	Status         string         `db:"status"`
+	CheckMessage   sql.NullString `db:"check_message"`
+	LastCheckedAt  sql.NullTime   `db:"last_checked_at"`
+	CreatedAt      time.Time      `db:"created_at"`
+	UpdatedAt      time.Time      `db:"updated_at"`
 }
 
 type InstanceMember struct {

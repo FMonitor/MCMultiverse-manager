@@ -1,0 +1,108 @@
+16:38:35 [INFO] Using mbed TLS based native cipher.
+16:38:35 [INFO] Using zlib based native compressor.
+16:38:35 [INFO] Enabled BungeeCord version git:BungeeCord-Bootstrap:1.21-R0.4-SNAPSHOT:01048b4:1999
+16:38:35 [INFO] Not on Windows, attempting to use enhanced EpollEventLoop
+16:38:35 [INFO] Epoll is working, utilising it!
+16:38:35 [INFO] Discovered module: ModuleSpec(name=cmd_alert, file=modules/cmd_alert.jar, provider=JenkinsModuleSource())
+16:38:35 [INFO] Discovered module: ModuleSpec(name=cmd_find, file=modules/cmd_find.jar, provider=JenkinsModuleSource())
+16:38:35 [INFO] Discovered module: ModuleSpec(name=cmd_list, file=modules/cmd_list.jar, provider=JenkinsModuleSource())
+16:38:35 [INFO] Discovered module: ModuleSpec(name=cmd_send, file=modules/cmd_send.jar, provider=JenkinsModuleSource())
+16:38:35 [INFO] Discovered module: ModuleSpec(name=cmd_server, file=modules/cmd_server.jar, provider=JenkinsModuleSource())
+16:38:35 [INFO] Discovered module: ModuleSpec(name=reconnect_yaml, file=modules/reconnect_yaml.jar, provider=JenkinsModuleSource())
+16:38:35 [INFO] Loaded plugin reconnect_yaml version git:reconnect_yaml:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:35 [INFO] Loaded plugin cmd_find version git:cmd_find:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:35 [INFO] Loaded plugin ColorMOTD version 1.5.3 by andylizi
+16:38:35 [INFO] Loaded plugin cmd_server version git:cmd_server:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:35 [INFO] Loaded plugin cmd_alert version git:cmd_alert:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:35 [INFO] Loaded plugin cmd_send version git:cmd_send:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:35 [INFO] Loaded plugin cmd_list version git:cmd_list:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] Enabled plugin reconnect_yaml version git:reconnect_yaml:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] [ColorMOTD] ColorMOTD v1.5.3 开始加载...
+16:38:36 [INFO] Enabled plugin cmd_find version git:cmd_find:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] [ColorMOTD] │├正在载入配置文件..
+16:38:36 [INFO] [ColorMOTD] │├正在加载图标...
+16:38:36 [INFO] [ColorMOTD] ││├成功加载图标"1.png"
+16:38:36 [INFO] [ColorMOTD] ││├找不到维护模式下的图标"serviceModeIcon.png",将使用正常状态下的图标
+16:38:36 [INFO] [ColorMOTD] ├您在配置文件里禁止了更新提示,那记得经常去发布贴检查有没有新版本哦~
+16:38:36 [INFO] [ColorMOTD] ├正在注册MOTD监听器...
+16:38:36 [INFO] [ColorMOTD] ColorMOTD v1.5.3加载完成,用时168毫秒
+16:38:36 [INFO] Enabled plugin ColorMOTD version 1.5.3 by andylizi
+16:38:36 [INFO] Enabled plugin cmd_server version git:cmd_server:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] Enabled plugin cmd_alert version git:cmd_alert:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] Enabled plugin cmd_send version git:cmd_send:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] Enabled plugin cmd_list version git:cmd_list:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:38:36 [INFO] Listening on /0.0.0.0:3011
+16:07:24 [INFO] Using mbed TLS based native cipher.
+16:07:24 [INFO] Using zlib based native compressor.
+16:07:24 [INFO] Enabled BungeeCord version git:BungeeCord-Bootstrap:1.21-R0.4-SNAPSHOT:01048b4:1999
+16:07:25 [INFO] Not on Windows, attempting to use enhanced EpollEventLoop
+16:07:25 [INFO] Epoll is working, utilising it!
+16:07:25 [INFO] Discovered module: ModuleSpec(name=cmd_alert, file=modules/cmd_alert.jar, provider=JenkinsModuleSource())
+16:07:25 [INFO] Discovered module: ModuleSpec(name=cmd_find, file=modules/cmd_find.jar, provider=JenkinsModuleSource())
+16:07:25 [INFO] Discovered module: ModuleSpec(name=cmd_list, file=modules/cmd_list.jar, provider=JenkinsModuleSource())
+16:07:25 [INFO] Discovered module: ModuleSpec(name=cmd_send, file=modules/cmd_send.jar, provider=JenkinsModuleSource())
+16:07:25 [INFO] Discovered module: ModuleSpec(name=cmd_server, file=modules/cmd_server.jar, provider=JenkinsModuleSource())
+16:07:25 [INFO] Discovered module: ModuleSpec(name=reconnect_yaml, file=modules/reconnect_yaml.jar, provider=JenkinsModuleSource())
+16:07:25 [INFO] Loaded plugin reconnect_yaml version git:reconnect_yaml:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Loaded plugin cmd_find version git:cmd_find:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Loaded plugin ColorMOTD version 1.5.3 by andylizi
+16:07:25 [WARNING] Error loading plugin ViaVersion
+java.lang.NoClassDefFoundError: org/bukkit/plugin/java/JavaPlugin
+	at java.base/java.lang.ClassLoader.defineClass1(Native Method)
+	at java.base/java.lang.ClassLoader.defineClass(ClassLoader.java:1027)
+	at java.base/java.security.SecureClassLoader.defineClass(SecureClassLoader.java:150)
+	at net.md_5.bungee.api.plugin.PluginClassloader.findClass(PluginClassloader.java:169)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:593)
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass0(PluginClassloader.java:74)
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass(PluginClassloader.java:67)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at net.md_5.bungee.api.plugin.PluginManager.enablePlugin(PluginManager.java:376)
+	at net.md_5.bungee.api.plugin.PluginManager.loadPlugins(PluginManager.java:286)
+	at net.md_5.bungee.BungeeCord.start(BungeeCord.java:288)
+	at net.md_5.bungee.BungeeCordLauncher.main(BungeeCordLauncher.java:69)
+	at net.md_5.bungee.Bootstrap.main(Bootstrap.java:15)
+Caused by: java.lang.ClassNotFoundException: org.bukkit.plugin.java.JavaPlugin
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass0(PluginClassloader.java:111)
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass(PluginClassloader.java:67)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	... 13 more
+16:07:25 [INFO] Loaded plugin cmd_server version git:cmd_server:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Loaded plugin cmd_alert version git:cmd_alert:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Loaded plugin cmd_send version git:cmd_send:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [WARNING] Error loading plugin ViaBackwards
+java.lang.NoClassDefFoundError: org/bukkit/plugin/java/JavaPlugin
+	at java.base/java.lang.ClassLoader.defineClass1(Native Method)
+	at java.base/java.lang.ClassLoader.defineClass(ClassLoader.java:1027)
+	at java.base/java.security.SecureClassLoader.defineClass(SecureClassLoader.java:150)
+	at net.md_5.bungee.api.plugin.PluginClassloader.findClass(PluginClassloader.java:169)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:593)
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass0(PluginClassloader.java:74)
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass(PluginClassloader.java:67)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at net.md_5.bungee.api.plugin.PluginManager.enablePlugin(PluginManager.java:376)
+	at net.md_5.bungee.api.plugin.PluginManager.loadPlugins(PluginManager.java:286)
+	at net.md_5.bungee.BungeeCord.start(BungeeCord.java:288)
+	at net.md_5.bungee.BungeeCordLauncher.main(BungeeCordLauncher.java:69)
+	at net.md_5.bungee.Bootstrap.main(Bootstrap.java:15)
+Caused by: java.lang.ClassNotFoundException: org.bukkit.plugin.java.JavaPlugin
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass0(PluginClassloader.java:111)
+	at net.md_5.bungee.api.plugin.PluginClassloader.loadClass(PluginClassloader.java:67)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	... 13 more
+16:07:25 [INFO] Loaded plugin cmd_list version git:cmd_list:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Enabled plugin reconnect_yaml version git:reconnect_yaml:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] [ColorMOTD] ColorMOTD v1.5.3 开始加载...
+16:07:25 [INFO] Enabled plugin cmd_find version git:cmd_find:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] [ColorMOTD] │├正在载入配置文件..
+16:07:25 [INFO] [ColorMOTD] │├正在加载图标...
+16:07:25 [INFO] [ColorMOTD] ││├成功加载图标"1.png"
+16:07:25 [INFO] [ColorMOTD] ││├找不到维护模式下的图标"serviceModeIcon.png",将使用正常状态下的图标
+16:07:25 [INFO] [ColorMOTD] ├您在配置文件里禁止了更新提示,那记得经常去发布贴检查有没有新版本哦~
+16:07:25 [INFO] [ColorMOTD] ├正在注册MOTD监听器...
+16:07:25 [INFO] [ColorMOTD] ColorMOTD v1.5.3加载完成,用时313毫秒
+16:07:25 [INFO] Enabled plugin ColorMOTD version 1.5.3 by andylizi
+16:07:25 [INFO] Enabled plugin cmd_server version git:cmd_server:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Enabled plugin cmd_alert version git:cmd_alert:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Enabled plugin cmd_send version git:cmd_send:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Enabled plugin cmd_list version git:cmd_list:1.21-R0.4-SNAPSHOT:01048b4:1999 by SpigotMC
+16:07:25 [INFO] Listening on /0.0.0.0:3011

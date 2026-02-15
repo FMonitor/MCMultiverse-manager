@@ -7,6 +7,14 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE INDEX IF NOT EXISTS idx_users_mc_name ON users (mc_name);
 
+INSERT INTO users (mc_uuid, mc_name, server_role) VALUES 
+  ('72e1022e-42d1-4ecb-bc55-7a11df37b39f', 'LCMonitor', 'admin'),
+  ('24952023-1f58-4a55-8496-8b3b9733f6fa', 'neckProtecter', 'admin'),
+  ('28152831-10e7-4f39-b03b-21ddb6e51b30', 'vulcan9', 'admin')
+ON CONFLICT (mc_uuid) DO UPDATE
+SET mc_name = EXCLUDED.mc_name,
+    server_role = EXCLUDED.server_role;
+
 CREATE TABLE IF NOT EXISTS map_templates (
   id BIGSERIAL PRIMARY KEY,
   tag TEXT NOT NULL UNIQUE,
@@ -16,6 +24,14 @@ CREATE TABLE IF NOT EXISTS map_templates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_map_templates_game_version ON map_templates (game_version);
+
+INSERT INTO map_templates (tag, display_name, game_version, blob_path) VALUES
+  ('single_world_template', 'Single World Template', '1.18.2', 'deploy/template/single_world_template'),
+  ('multi_world_template', 'Multi World Template', '1.16.5', 'deploy/template/multi_world_template')
+ON CONFLICT (tag) DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    game_version = EXCLUDED.game_version,
+    blob_path = EXCLUDED.blob_path;
 
 CREATE TABLE IF NOT EXISTS server_images (
   id TEXT PRIMARY KEY,
@@ -30,6 +46,18 @@ INSERT INTO server_images (id, name, game_version) VALUES
   ('runtime-java21', 'MiniMap Java21 Runtime', '1.21.1')
 ON CONFLICT (id) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS game_versions (
+  game_version TEXT PRIMARY KEY,
+  runtime_image_id TEXT REFERENCES server_images(id) ON DELETE SET NULL,
+  core_jar TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('pending', 'verified', 'failed')),
+  check_message TEXT,
+  last_checked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_game_versions_status ON game_versions (status);
+
 CREATE TABLE IF NOT EXISTS map_instances (
   id BIGSERIAL PRIMARY KEY,
   alias TEXT NOT NULL UNIQUE,
@@ -39,6 +67,9 @@ CREATE TABLE IF NOT EXISTS map_instances (
   game_version TEXT NOT NULL,
   access_mode TEXT NOT NULL DEFAULT 'privacy' CHECK (access_mode IN ('privacy', 'public')),
   status TEXT NOT NULL CHECK (status IN ('Waiting', 'Preparing', 'Starting', 'On', 'Stopping', 'Off', 'Archived')),
+  health_status TEXT NOT NULL DEFAULT 'unknown' CHECK (health_status IN ('unknown', 'healthy', 'start_failed', 'unreachable')),
+  last_error_msg TEXT,
+  last_health_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_active_at TIMESTAMPTZ,
@@ -49,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_map_instances_template_id ON map_instances (templ
 CREATE INDEX IF NOT EXISTS idx_map_instances_game_version ON map_instances (game_version);
 CREATE INDEX IF NOT EXISTS idx_map_instances_status ON map_instances (status);
 CREATE INDEX IF NOT EXISTS idx_map_instances_access_mode ON map_instances (access_mode);
+CREATE INDEX IF NOT EXISTS idx_map_instances_health_status ON map_instances (health_status);
 
 CREATE TABLE IF NOT EXISTS instance_members (
   id BIGSERIAL PRIMARY KEY,

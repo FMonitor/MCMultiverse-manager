@@ -17,7 +17,14 @@ import (
 
 	"mcmm/internal/log"
 	"mcmm/internal/pgsql"
+	"mcmm/internal/servertap"
 )
+
+const serverTapReadyMaxRetries = 5
+const serverTapCommandMaxRetries = 3
+const serverTapRetryDelay = 5 * time.Second
+const failInstanceUpdateTimeout = 3 * time.Second
+const fixedInstanceNetworkName = "mcmultiverse-manager_mcmm-network"
 
 type WorkerI struct {
 	repos  pgsql.Repos
@@ -39,6 +46,22 @@ func NewWorkerI(repos pgsql.Repos, opts Options) (*WorkerI, error) {
 	if opts.DefaultGameVersion == "" {
 		opts.DefaultGameVersion = "1.21.1"
 	}
+	if opts.ServerTapPort <= 0 {
+		opts.ServerTapPort = 4567
+	}
+	if opts.ServerTapTimeout < 0 {
+		opts.ServerTapTimeout = 0
+	}
+	if strings.TrimSpace(opts.InstanceNetwork) != "" && strings.TrimSpace(opts.InstanceNetwork) != fixedInstanceNetworkName {
+		log.Component("worker").Warnf("instance_network=%s is ignored; forcing %s", opts.InstanceNetwork, fixedInstanceNetworkName)
+	}
+	opts.InstanceNetwork = fixedInstanceNetworkName
+	if strings.TrimSpace(opts.InstanceTapURLPattern) == "" {
+		opts.InstanceTapURLPattern = fmt.Sprintf("http://mcmm-inst-%%d:%d", opts.ServerTapPort)
+	}
+	if strings.TrimSpace(opts.BootstrapAdminName) == "" {
+		opts.BootstrapAdminName = "LCMonitor"
+	}
 	if opts.Now == nil {
 		opts.Now = Now
 	}
@@ -52,6 +75,7 @@ func NewWorkerI(repos pgsql.Repos, opts Options) (*WorkerI, error) {
 func (w *WorkerI) StartFromTemplate(ctx context.Context, instanceID int64, template pgsql.MapTemplate) error {
 	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
 	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
 		return fmt.Errorf("read instance: %w", err)
 	}
 	version := inst.GameVersion
@@ -67,6 +91,7 @@ func (w *WorkerI) StartFromTemplate(ctx context.Context, instanceID int64, templ
 func (w *WorkerI) StartFromUpload(ctx context.Context, instanceID int64, uploadWorldPath string) error {
 	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
 	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
 		return fmt.Errorf("read instance: %w", err)
 	}
 	version := inst.GameVersion
@@ -79,6 +104,7 @@ func (w *WorkerI) StartFromUpload(ctx context.Context, instanceID int64, uploadW
 func (w *WorkerI) StartEmpty(ctx context.Context, instanceID int64, gameVersion string) error {
 	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
 	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
 		return fmt.Errorf("read instance: %w", err)
 	}
 	if strings.TrimSpace(gameVersion) == "" {
@@ -90,10 +116,12 @@ func (w *WorkerI) StartEmpty(ctx context.Context, instanceID int64, gameVersion 
 func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
 	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
 		return fmt.Errorf("read instance: %w", err)
 	}
 
 	if err := w.setStatus(ctx, &inst, StatusStopping); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set stopping: %v", err))
 		return err
 	}
 	if err := w.stopCompose(ctx, inst.ID); err != nil {
@@ -101,6 +129,7 @@ func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 		return err
 	}
 	if err := w.setStatus(ctx, &inst, StatusOff); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set off: %v", err))
 		return err
 	}
 	if err := w.archiveWorld(inst.ID); err != nil {
@@ -110,6 +139,7 @@ func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 
 	inst.ArchivedAt = toNullTime(w.opts.Now())
 	if err := w.setStatus(ctx, &inst, StatusArchived); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set archived: %v", err))
 		return err
 	}
 	return nil
@@ -118,19 +148,21 @@ func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 func (w *WorkerI) DeleteArchived(ctx context.Context, instanceID int64) error {
 	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
 	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
 		return fmt.Errorf("read instance: %w", err)
 	}
 	if Status(inst.Status) != StatusArchived {
 		return fmt.Errorf("instance %d is not archived (status=%s)", instanceID, inst.Status)
 	}
-	archiveFile := w.archivePath(instanceID)
-	_ = os.Remove(archiveFile)
+	archiveDir := w.archiveDirPath(instanceID)
+	_ = os.RemoveAll(archiveDir)
 	_ = os.RemoveAll(instanceDir(w.opts.InstanceRootDir, instanceID))
 	return nil
 }
 
 func (w *WorkerI) runStartFlow(ctx context.Context, inst pgsql.MapInstance, gameVersion string, sourceWorldPath string) error {
 	if err := w.setStatus(ctx, &inst, StatusPreparing); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set preparing: %v", err))
 		return err
 	}
 	if err := w.prepareInstanceVolume(inst.ID, sourceWorldPath); err != nil {
@@ -142,19 +174,95 @@ func (w *WorkerI) runStartFlow(ctx context.Context, inst pgsql.MapInstance, game
 		return err
 	}
 	if err := w.setStatus(ctx, &inst, StatusStarting); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set starting: %v", err))
 		return err
 	}
 	if err := w.startCompose(ctx, inst.ID); err != nil {
 		_ = w.failInstance(ctx, &inst, fmt.Sprintf("start compose: %v", err))
 		return err
 	}
+	time.Sleep(10 * time.Second)
+	if err := w.configureInstanceAccess(ctx, inst); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("configure access: %v", err))
+		return err
+	}
 
 	inst.GameVersion = gameVersion
 	inst.ArchivedAt = toNullTimeZero()
 	inst.LastActiveAt = toNullTime(w.opts.Now())
+	inst.HealthStatus = string(HealthHealthy)
+	inst.LastErrorMsg = sql.NullString{}
+	inst.LastHealthAt = toNullTime(w.opts.Now())
 	if err := w.setStatus(ctx, &inst, StatusOn); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set on: %v", err))
 		return err
 	}
+	return nil
+}
+
+func (w *WorkerI) configureInstanceAccess(ctx context.Context, inst pgsql.MapInstance) error {
+	tapURL := fmt.Sprintf(w.opts.InstanceTapURLPattern, inst.ID)
+	conn, err := servertap.NewConnectorWithAuth(tapURL, w.opts.ServerTapTimeout, w.opts.ServerTapAuthName, w.opts.ServerTapAuthKey)
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+	for i := 0; i < serverTapReadyMaxRetries; i++ {
+		lastErr = executeServerTapWithRetry(ctx, conn, inst.ID, "whitelist on", 1, w.logger)
+		if lastErr == nil {
+			break
+		}
+		w.logger.Warnf("instance=%d servertap ready check failed (%d/%d): %v", inst.ID, i+1, serverTapReadyMaxRetries, lastErr)
+		time.Sleep(serverTapRetryDelay)
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+
+	processed := map[string]struct{}{}
+	admin := strings.TrimSpace(w.opts.BootstrapAdminName)
+	if admin != "" {
+		if err := allowAndOpUser(ctx, conn, inst.ID, admin, processed, w.logger); err != nil {
+			return err
+		}
+	}
+
+	owner, err := w.repos.User.Read(ctx, inst.OwnerID)
+	if err != nil {
+		return err
+	}
+	if err := allowAndOpUser(ctx, conn, inst.ID, owner.MCName, processed, w.logger); err != nil {
+		return err
+	}
+	return nil
+}
+
+func allowAndOpUser(
+	ctx context.Context,
+	conn *servertap.Connector,
+	instanceID int64,
+	name string,
+	processed map[string]struct{},
+	logger interface {
+		Warnf(string, ...any)
+	},
+) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	key := strings.ToLower(name)
+	if _, exists := processed[key]; exists {
+		return nil
+	}
+	if err := executeServerTapWithRetry(ctx, conn, instanceID, "whitelist add "+name, serverTapCommandMaxRetries, logger); err != nil {
+		return err
+	}
+	if err := executeServerTapWithRetry(ctx, conn, instanceID, servertap.NewCommandBuilder("op").Arg(name).Build(), serverTapCommandMaxRetries, logger); err != nil {
+		return err
+	}
+	processed[key] = struct{}{}
 	return nil
 }
 
@@ -174,14 +282,37 @@ func (w *WorkerI) setStatus(ctx context.Context, inst *pgsql.MapInstance, to Sta
 
 func (w *WorkerI) failInstance(ctx context.Context, inst *pgsql.MapInstance, reason string) error {
 	w.logger.Errorf("instance=%d failed: %s", inst.ID, reason)
+	inst.HealthStatus = string(classifyHealthFailure(reason))
+	inst.LastErrorMsg = sql.NullString{String: reason, Valid: true}
+	inst.LastHealthAt = toNullTime(w.opts.Now())
 	inst.Status = string(StatusOff)
 	inst.UpdatedAt = w.opts.Now()
-	return w.repos.MapInstance.Update(ctx, *inst)
+	dbCtx, cancel := context.WithTimeout(context.Background(), failInstanceUpdateTimeout)
+	defer cancel()
+	return w.repos.MapInstance.Update(dbCtx, *inst)
+}
+
+func (w *WorkerI) failInstanceByID(instanceID int64, reason string) {
+	w.logger.Errorf("instance=%d failed: %s", instanceID, reason)
+	dbCtx, cancel := context.WithTimeout(context.Background(), failInstanceUpdateTimeout)
+	defer cancel()
+	inst, err := w.repos.MapInstance.Read(dbCtx, instanceID)
+	if err != nil {
+		w.logger.Errorf("instance=%d fail-state read error: %v", instanceID, err)
+		return
+	}
+	if err := w.failInstance(dbCtx, &inst, reason); err != nil {
+		w.logger.Errorf("instance=%d fail-state update error: %v", instanceID, err)
+	}
 }
 
 func (w *WorkerI) prepareInstanceVolume(instanceID int64, sourceWorldPath string) error {
 	base := instanceDir(w.opts.InstanceRootDir, instanceID)
 	if err := os.MkdirAll(base, 0o755); err != nil {
+		return err
+	}
+	whitelistFile := filepath.Join(base, "whitelist.json")
+	if err := ensureFileWithDefault(whitelistFile, []byte("[]\n")); err != nil {
 		return err
 	}
 	worldDir := filepath.Join(base, "world")
@@ -241,8 +372,67 @@ func (w *WorkerI) prepareComposeFile(instanceID int64, version string) error {
 	}
 
 	base := instanceDir(w.opts.InstanceRootDir, instanceID)
+	coreSrc := filepath.Join(versionDir, jarName)
+	cacheSrc := filepath.Join(versionDir, "cache")
+	versionsSrc := filepath.Join(versionDir, "versions")
+	coreDst := filepath.Join(base, jarName)
+	cacheDst := filepath.Join(base, "cache")
+	versionsDst := filepath.Join(base, "versions")
+
+	if err := copyFile(coreSrc, coreDst, 0o644); err != nil {
+		return fmt.Errorf("copy core jar: %w", err)
+	}
+	if isDir(cacheSrc) {
+		if err := os.RemoveAll(cacheDst); err != nil {
+			return err
+		}
+		if err := copyDir(cacheSrc, cacheDst); err != nil {
+			return fmt.Errorf("copy cache: %w", err)
+		}
+	} else if err := os.MkdirAll(cacheDst, 0o755); err != nil {
+		return err
+	}
+	if isDir(versionsSrc) {
+		if err := os.RemoveAll(versionsDst); err != nil {
+			return err
+		}
+		if err := copyDir(versionsSrc, versionsDst); err != nil {
+			return fmt.Errorf("copy versions: %w", err)
+		}
+	} else if err := os.MkdirAll(versionsDst, 0o755); err != nil {
+		return err
+	}
+
+	coreMount, err := filepath.Abs(coreDst)
+	if err != nil {
+		return err
+	}
+	cacheMount, err := filepath.Abs(cacheDst)
+	if err != nil {
+		return err
+	}
+	versionsMount, err := filepath.Abs(versionsDst)
+	if err != nil {
+		return err
+	}
+	worldMount, err := filepath.Abs(filepath.Join(base, "world"))
+	if err != nil {
+		return err
+	}
+	netherMount, err := filepath.Abs(filepath.Join(base, "world_nether"))
+	if err != nil {
+		return err
+	}
+	endMount, err := filepath.Abs(filepath.Join(base, "world_the_end"))
+	if err != nil {
+		return err
+	}
+	whitelistMount, err := filepath.Abs(filepath.Join(base, "whitelist.json"))
+	if err != nil {
+		return err
+	}
+
 	composePath := filepath.Join(base, "docker-compose.yml")
-	gamePort, tapPort := instancePorts(instanceID)
 	content := fmt.Sprintf(`services:
   mcmm-inst-%d:
     image: %s
@@ -250,9 +440,7 @@ func (w *WorkerI) prepareComposeFile(instanceID int64, version string) error {
     restart: unless-stopped
     environment:
       JAVA_TOOL_OPTIONS: "-Xms1G -Xmx2G"
-    ports:
-      - "%d:25565"
-      - "%d:%d"
+      PAPER_JAR: "%s"
     volumes:
       - %s:/data/server/%s:ro
       - %s:/data/server/cache
@@ -260,19 +448,31 @@ func (w *WorkerI) prepareComposeFile(instanceID int64, version string) error {
       - %s:/data/server/world
       - %s:/data/server/world_nether
       - %s:/data/server/world_the_end
-`, instanceID, imageTag, instanceID, gamePort, tapPort, w.opts.ServerTapPort,
-		filepath.Join(versionDir, jarName), jarName,
-		filepath.Join(versionDir, "cache"),
-		filepath.Join(versionDir, "versions"),
-		filepath.Join(base, "world"),
-		filepath.Join(base, "world_nether"),
-		filepath.Join(base, "world_the_end"),
+      - %s:/data/server/whitelist.json
+    networks:
+      - %s
+networks:
+  %s:
+    external: true
+`, instanceID, imageTag, instanceID, jarName,
+		coreMount, jarName,
+		cacheMount,
+		versionsMount,
+		worldMount,
+		netherMount,
+		endMount,
+		whitelistMount,
+		w.opts.InstanceNetwork,
+		w.opts.InstanceNetwork,
 	)
 	return os.WriteFile(composePath, []byte(content), 0o644)
 }
 
 func (w *WorkerI) startCompose(ctx context.Context, instanceID int64) error {
 	composePath := filepath.Join(instanceDir(w.opts.InstanceRootDir, instanceID), "docker-compose.yml")
+	if err := ensureDockerNetwork(ctx, w.opts.InstanceNetwork); err != nil {
+		return fmt.Errorf("ensure network %s: %w", w.opts.InstanceNetwork, err)
+	}
 	return runCmd(ctx, "docker", "compose", "-f", composePath, "up", "-d")
 }
 
@@ -282,17 +482,23 @@ func (w *WorkerI) stopCompose(ctx context.Context, instanceID int64) error {
 }
 
 func (w *WorkerI) archiveWorld(instanceID int64) error {
-	base := instanceDir(w.opts.InstanceRootDir, instanceID)
-	src := filepath.Join(base, "world")
+	src := instanceDir(w.opts.InstanceRootDir, instanceID)
 	if err := os.MkdirAll(w.opts.ArchiveRootDir, 0o755); err != nil {
 		return err
 	}
-	dst := w.archivePath(instanceID)
-	return tarGzDir(src, dst)
+	dst := w.archiveDirPath(instanceID)
+	if err := os.RemoveAll(dst); err != nil {
+		return err
+	}
+	if err := moveDir(src, dst); err != nil {
+		return err
+	}
+	w.logger.Infof("instance=%d archived into %s", instanceID, dst)
+	return nil
 }
 
-func (w *WorkerI) archivePath(instanceID int64) string {
-	return filepath.Join(w.opts.ArchiveRootDir, fmt.Sprintf("instance-%d.tar.gz", instanceID))
+func (w *WorkerI) archiveDirPath(instanceID int64) string {
+	return filepath.Join(w.opts.ArchiveRootDir, fmt.Sprintf("instance-%d", instanceID))
 }
 
 func canTransit(from, to Status) bool {
@@ -305,7 +511,7 @@ func canTransit(from, to Status) bool {
 		StatusStarting:  {StatusOn: true, StatusOff: true},
 		StatusOn:        {StatusStopping: true},
 		StatusStopping:  {StatusOff: true},
-		StatusOff:       {StatusStarting: true, StatusArchived: true},
+		StatusOff:       {StatusPreparing: true, StatusStarting: true, StatusArchived: true},
 		StatusArchived:  {},
 	}
 	if next, ok := allowed[from]; ok {
@@ -342,11 +548,6 @@ func instanceDir(root string, id int64) string {
 	return filepath.Join(root, strconv.FormatInt(id, 10))
 }
 
-func instancePorts(id int64) (game int64, tap int64) {
-	// deterministic per instance to reduce collision in local dev.
-	return 30000 + (id % 1000), 31000 + (id % 1000)
-}
-
 func resolveTemplateWorldPaths(input string) (templateRoot string, worldPath string) {
 	clean := filepath.Clean(input)
 	// If caller passes ".../<template>/world", infer template root.
@@ -365,11 +566,6 @@ func resolveTemplateWorldPaths(input string) (templateRoot string, worldPath str
 	return filepath.Dir(clean), clean
 }
 
-func InstanceTapPort(id int64) int64 {
-	_, tap := instancePorts(id)
-	return tap
-}
-
 func runCmd(ctx context.Context, bin string, args ...string) error {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	out, err := cmd.CombinedOutput()
@@ -377,6 +573,18 @@ func runCmd(ctx context.Context, bin string, args ...string) error {
 		return fmt.Errorf("%s %s failed: %w, output=%s", bin, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func ensureDockerNetwork(ctx context.Context, network string) error {
+	network = strings.TrimSpace(network)
+	if network == "" {
+		return nil
+	}
+	inspectErr := runCmd(ctx, "docker", "network", "inspect", network)
+	if inspectErr == nil {
+		return nil
+	}
+	return runCmd(ctx, "docker", "network", "create", "--driver", "bridge", network)
 }
 
 func isDir(path string) bool {
@@ -395,6 +603,20 @@ func clearDir(path string) error {
 		}
 	}
 	return nil
+}
+
+func ensureFileWithDefault(path string, content []byte) error {
+	_, err := os.Stat(path)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0o644)
 }
 
 func copyDir(src, dst string) error {
@@ -477,12 +699,61 @@ func tarGzDir(srcDir, dstTarGz string) error {
 	})
 }
 
+func moveDir(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	// Cross-device fallback: copy then delete source.
+	if err := copyDir(src, dst); err != nil {
+		return err
+	}
+	return os.RemoveAll(src)
+}
+
 func toNullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t, Valid: true}
 }
 
 func toNullTimeZero() sql.NullTime {
 	return sql.NullTime{}
+}
+
+func classifyHealthFailure(reason string) HealthStatus {
+	lower := strings.ToLower(reason)
+	if strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "servertap") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "i/o timeout") {
+		return HealthUnreachable
+	}
+	return HealthStartFailed
+}
+
+func executeServerTapWithRetry(
+	ctx context.Context,
+	conn *servertap.Connector,
+	instanceID int64,
+	command string,
+	maxRetries int,
+	logger interface {
+		Warnf(string, ...any)
+	},
+) error {
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, lastErr = conn.Execute(ctx, servertap.ExecuteRequest{Command: command})
+		if lastErr == nil {
+			return nil
+		}
+		if i < maxRetries-1 {
+			logger.Warnf("instance=%d servertap command failed (%d/%d) cmd=%q err=%v", instanceID, i+1, maxRetries, command, lastErr)
+			time.Sleep(serverTapRetryDelay)
+		}
+	}
+	return lastErr
 }
 
 func Now() time.Time {

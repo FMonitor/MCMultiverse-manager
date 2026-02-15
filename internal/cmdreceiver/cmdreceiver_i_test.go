@@ -26,6 +26,17 @@ func (m *serviceMock) HandleWorldCommand(ctx context.Context, req WorldCommandRe
 	return m.status, m.resp
 }
 
+func (m *serviceMock) HandlePlayerJoin(ctx context.Context, actorUUID string, actorName string) (int, WorldCommandResponse) {
+	m.called = true
+	if m.status == 0 {
+		m.status = http.StatusOK
+	}
+	if m.resp.Status == "" {
+		m.resp.Status = "accepted"
+	}
+	return m.status, m.resp
+}
+
 func TestHandleWorldCommand_MethodNotAllowed(t *testing.T) {
 	h := NewHandlerI(&serviceMock{})
 	mux := http.NewServeMux()

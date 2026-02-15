@@ -25,7 +25,6 @@ import (
 const (
 	startupTimeout     = 10 * time.Second
 	defaultGameVersion = "1.21.1"
-	serverTapPort      = 4567
 )
 
 func main() {
@@ -38,8 +37,8 @@ func main() {
 	if err != nil {
 		logger.Fatalf("Failed to load config: %v", err)
 	}
-	logger.Info("[ok] Configuration loaded")
 	config.LogSummary(cfg)
+	logger.Info("[ok] Configuration loaded")
 
 	logger.Info("[step] Preparing runtime directories")
 	if err := ensureDirs([]string{cfg.TemplateRootPath, cfg.InstanceRootPath, cfg.VersionRootPath, cfg.ArchiveRootPath}); err != nil {
@@ -64,24 +63,36 @@ func main() {
 
 	logger.Info("[step] Initializing worker")
 	workerSvc, err := worker.NewWorkerI(repos, worker.Options{
-		InstanceRootDir:    cfg.InstanceRootPath,
-		VersionRootDir:     cfg.VersionRootPath,
-		ComposeTemplateDir: cfg.VersionRootPath,
-		ArchiveRootDir:     cfg.ArchiveRootPath,
-		DefaultGameVersion: defaultGameVersion,
-		ServerTapPort:      serverTapPort,
-		ServerTapAuthKey:   cfg.ServerTapKey,
-		ServerTapAuthName:  cfg.ServerTapAuthHeader,
-		Now:                time.Now,
+		InstanceRootDir:       cfg.InstanceRootPath,
+		VersionRootDir:        cfg.VersionRootPath,
+		ComposeTemplateDir:    cfg.VersionRootPath,
+		ArchiveRootDir:        cfg.ArchiveRootPath,
+		DefaultGameVersion:    defaultGameVersion,
+		ServerTapPort:         cfg.MiniServerTapPort,
+		InstanceNetwork:       cfg.InstanceNetwork,
+		InstanceTapURLPattern: cfg.MiniTapHostPattern,
+		ServerTapAuthKey:      cfg.ServerTapKey,
+		ServerTapAuthName:     cfg.ServerTapAuthHeader,
+		BootstrapAdminName:    cfg.BootstrapAdminName,
+		Now:                   time.Now,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to initialize worker: %v", err)
 	}
 	logger.Info("[ok] Worker initialized")
 
+	logger.Info("[step] Verifying lobby ServerTap connectivity")
+	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer verifyCancel()
+	if err := verifyLobbyServerTap(verifyCtx, cfg, logger); err != nil {
+		logger.Warnf("[warn] Lobby ServerTap check failed: %v", err)
+	} else {
+		logger.Info("[ok] Lobby ServerTap reachable")
+	}
+
 	logger.Info("[step] Runtime bootstrap self-check")
-	if err := bootstrapRuntimeSelfCheck(startCtx, cfg, repos, workerSvc, logger); err != nil {
-		logger.Warnf("runtime bootstrap self-check warnings: %v", err)
+	if err := bootstrapRuntimeSelfCheck(context.Background(), cfg, repos, workerSvc, logger); err != nil {
+		logger.Errorf("runtime bootstrap self-check failed: %v", err)
 	} else {
 		logger.Info("[ok] Runtime bootstrap self-check completed")
 	}
@@ -138,9 +149,27 @@ func ensureDirs(dirs []string) error {
 	return nil
 }
 
+func verifyLobbyServerTap(ctx context.Context, cfg config.Config, logger interface {
+	Infof(string, ...any)
+	Warnf(string, ...any)
+	Errorf(string, ...any)
+}) error {
+	conn, err := servertap.NewConnectorWithAuth(cfg.LobbyServerTapURL, 5*time.Second, cfg.ServerTapAuthHeader, cfg.ServerTapKey)
+	if err != nil {
+		return err
+	}
+	resp, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "list"})
+	if err != nil {
+		return err
+	}
+	logger.Infof("[main] lobby servertap command=list status=%d body_bytes=%d", resp.StatusCode, len(resp.RawBody))
+	return nil
+}
+
 func bootstrapRuntimeSelfCheck(ctx context.Context, cfg config.Config, repos pgsql.Repos, w worker.Worker, logger interface {
 	Infof(string, ...any)
 	Warnf(string, ...any)
+	Errorf(string, ...any)
 }) error {
 	versions, err := detectRunnableVersions(cfg.VersionRootPath)
 	if err != nil {
@@ -157,11 +186,33 @@ func bootstrapRuntimeSelfCheck(ctx context.Context, cfg config.Config, repos pgs
 	}
 
 	var failed []string
+	logFail := func(version string, msg string, err error) {
+		line := fmt.Sprintf("%s: %s: %v", version, msg, err)
+		failed = append(failed, line)
+		logger.Errorf("[bootstrap] %s", line)
+	}
+
 	for _, ver := range versions {
-		if err := ensureServerImage(ctx, repos, ver); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: ensure server image: %v", ver, err))
+		existingVersion, readErr := repos.GameVersion.Read(ctx, ver)
+		if readErr == nil && existingVersion.Status == "verified" {
+			logger.Infof("[bootstrap] %s already verified in DB, skip self-check", ver)
 			continue
 		}
+		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+			logFail(ver, "read game_version", readErr)
+			continue
+		}
+
+		coreJar, jarErr := detectCoreJarName(cfg.VersionRootPath, ver)
+		if jarErr != nil {
+			logFail(ver, "detect core jar", jarErr)
+			continue
+		}
+		if err := ensureServerImage(ctx, repos, ver); err != nil {
+			logFail(ver, "ensure server image", err)
+			continue
+		}
+		runtimeID := sql.NullString{String: "runtime-" + strings.ReplaceAll(ver, ".", "_"), Valid: true}
 
 		instanceID, err := repos.MapInstance.Create(ctx, pgsql.MapInstance{
 			Alias:       "bootstrap-" + strings.ReplaceAll(ver, ".", "-"),
@@ -172,31 +223,47 @@ func bootstrapRuntimeSelfCheck(ctx context.Context, cfg config.Config, repos pgs
 			Status:      string(worker.StatusWaiting),
 		})
 		if err != nil {
-			failed = append(failed, fmt.Sprintf("%s: create instance: %v", ver, err))
-			continue
+			alias := "bootstrap-" + strings.ReplaceAll(ver, ".", "-")
+			existing, readErr := repos.MapInstance.ReadByAlias(ctx, alias)
+			if readErr != nil {
+				logFail(ver, "create instance", err)
+				continue
+			}
+			instanceID = existing.ID
 		}
 		_, _ = repos.InstanceMember.Create(ctx, pgsql.InstanceMember{InstanceID: instanceID, UserID: admin.ID, Role: "owner"})
 
 		if err := w.StartEmpty(ctx, instanceID, ver); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: start empty: %v", ver, err))
+			logFail(ver, "start empty", err)
 			continue
-		}
-		if err := applyBootstrapCommands(ctx, cfg, admin.MCName, instanceID); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: bootstrap commands: %v", ver, err))
 		}
 		if err := w.StopAndArchive(ctx, instanceID); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: stop/archive: %v", ver, err))
+			logFail(ver, "stop/archive", err)
 			continue
 		}
-		if err := w.DeleteArchived(ctx, instanceID); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: delete archived: %v", ver, err))
-		}
+		// if err := w.DeleteArchived(ctx, instanceID); err != nil {
+		// 	logFail(ver, "delete archived", err)
+		// 	continue
+		// }
+		_ = repos.GameVersion.UpsertCheckResult(ctx, ver, runtimeID, coreJar, "verified", sql.NullString{})
 	}
 
 	if len(failed) == 0 {
 		return nil
 	}
-	return errors.New(strings.Join(failed, "; "))
+	return errors.New(fmt.Sprintf("%d version checks failed", len(failed)))
+}
+
+func detectCoreJarName(versionRoot string, version string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(versionRoot, version, "paper-*.jar"))
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no paper jar found under %s/%s", versionRoot, version)
+	}
+	sort.Strings(matches)
+	return filepath.Base(matches[len(matches)-1]), nil
 }
 
 func detectRunnableVersions(versionRoot string) ([]string, error) {
@@ -245,25 +312,6 @@ func ensureServerImage(ctx context.Context, repos pgsql.Repos, version string) e
 		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 			return nil
 		}
-		return err
-	}
-	return nil
-}
-
-func applyBootstrapCommands(ctx context.Context, cfg config.Config, ownerName string, instanceID int64) error {
-	tapURL := fmt.Sprintf("http://127.0.0.1:%d", worker.InstanceTapPort(instanceID))
-	conn, err := servertap.NewConnectorWithAuth(tapURL, 8*time.Second, cfg.ServerTapAuthHeader, cfg.ServerTapKey)
-	if err != nil {
-		return err
-	}
-	svc := servertap.NewServiceC(conn)
-	if _, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "whitelist on"}); err != nil {
-		return err
-	}
-	if _, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "whitelist add " + ownerName}); err != nil {
-		return err
-	}
-	if _, err := svc.OPUser(ctx, ownerName); err != nil {
 		return err
 	}
 	return nil

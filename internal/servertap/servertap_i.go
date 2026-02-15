@@ -62,7 +62,7 @@ func NewConnectorWithAuth(baseURL string, timeout time.Duration, authHeader stri
 	}
 
 	clientTimeout := timeout
-	if clientTimeout <= 0 {
+	if clientTimeout < 0 {
 		clientTimeout = 10 * time.Second
 	}
 
@@ -158,7 +158,11 @@ func (c *Connector) Execute(ctx context.Context, req ExecuteRequest) (ParsedResp
 	if err != nil {
 		return ParsedResponse{}, err
 	}
-	logger.Infof("servertap response status=%d body_bytes=%d", parsed.StatusCode, len(parsed.RawBody))
+	bodyPreview := strings.TrimSpace(parsed.RawBody)
+	if len(bodyPreview) > 240 {
+		bodyPreview = bodyPreview[:240] + "..."
+	}
+	logger.Infof("servertap response status=%d body_bytes=%d body=%q", parsed.StatusCode, len(parsed.RawBody), bodyPreview)
 	return parsed, nil
 }
 

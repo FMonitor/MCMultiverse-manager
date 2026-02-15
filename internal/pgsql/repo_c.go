@@ -36,9 +36,18 @@ type ServerImageRepo interface {
 	Delete(ctx context.Context, id string) error
 }
 
+type GameVersionRepo interface {
+	UpsertCheckResult(ctx context.Context, version string, runtimeImageID sql.NullString, coreJar string, status string, checkMessage sql.NullString) error
+	Read(ctx context.Context, version string) (GameVersion, error)
+	ListVerified(ctx context.Context) ([]GameVersion, error)
+}
+
 type MapInstanceRepo interface {
 	Create(ctx context.Context, inst MapInstance) (int64, error)
 	Read(ctx context.Context, id int64) (MapInstance, error)
+	ReadByAlias(ctx context.Context, alias string) (MapInstance, error)
+	ListByOwner(ctx context.Context, ownerID int64) ([]MapInstance, error)
+	List(ctx context.Context) ([]MapInstance, error)
 	Update(ctx context.Context, inst MapInstance) error
 	Delete(ctx context.Context, id int64) error
 }
@@ -46,6 +55,7 @@ type MapInstanceRepo interface {
 type InstanceMemberRepo interface {
 	Create(ctx context.Context, member InstanceMember) (int64, error)
 	Read(ctx context.Context, id int64) (InstanceMember, error)
+	ListByInstance(ctx context.Context, instanceID int64) ([]InstanceMember, error)
 	Update(ctx context.Context, member InstanceMember) error
 	Delete(ctx context.Context, id int64) error
 	DeleteByInstanceAndUser(ctx context.Context, instanceID int64, userID int64) error
@@ -55,6 +65,8 @@ type UserRequestRepo interface {
 	Create(ctx context.Context, req UserRequest) (int64, error)
 	Read(ctx context.Context, id int64) (UserRequest, error)
 	ReadByRequestID(ctx context.Context, requestID string) (UserRequest, error)
+	ListByActor(ctx context.Context, actorUserID int64, limit int) ([]UserRequest, error)
+	ListPending(ctx context.Context, limit int) ([]UserRequest, error)
 	Update(ctx context.Context, req UserRequest) error
 	Delete(ctx context.Context, id int64) error
 	CreateAcceptedIfNotExists(ctx context.Context, requestID string, requestType string, actorUserID sql.NullInt64, targetInstanceID sql.NullInt64) (UserRequest, bool, error)
@@ -65,6 +77,7 @@ type Repos struct {
 	User           UserRepo
 	MapTemplate    MapTemplateRepo
 	ServerImage    ServerImageRepo
+	GameVersion    GameVersionRepo
 	MapInstance    MapInstanceRepo
 	InstanceMember InstanceMemberRepo
 	UserRequest    UserRequestRepo
@@ -75,6 +88,7 @@ func NewRepos(connector SQLConnector) Repos {
 		User:           NewUserRepoI(connector),
 		MapTemplate:    NewMapTemplateRepoI(connector),
 		ServerImage:    NewServerImageRepoI(connector),
+		GameVersion:    NewGameVersionRepoI(connector),
 		MapInstance:    NewMapInstanceRepoI(connector),
 		InstanceMember: NewInstanceMemberRepoI(connector),
 		UserRequest:    NewUserRequestRepoI(connector),

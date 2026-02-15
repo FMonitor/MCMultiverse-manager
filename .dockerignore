@@ -1,0 +1,19 @@
+# Exclude everything by default
+**
+
+# Keep Go module files
+!go.mod
+!go.sum
+
+# Keep backend source
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+
+# Keep runtime config samples (and local config if you choose to bake it)
+!config/
+!config/config.yml.example
+
+# Keep Dockerfile itself
+!Dockerfile

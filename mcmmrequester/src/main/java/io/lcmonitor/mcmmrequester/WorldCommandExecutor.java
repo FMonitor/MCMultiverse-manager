@@ -9,9 +9,9 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -19,14 +19,12 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class WorldCommandExecutor implements CommandExecutor, TabCompleter {
-    private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("world", "template", "confirm");
-    private static final List<String> WORLD_OPERATIONS = Arrays.asList("add", "remove", "delete");
+    private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("world", "template", "instance", "confirm", "help");
     private static final long DELETE_CONFIRM_TTL_SECONDS = 30;
 
     private final JavaPlugin plugin;
     private final BackendClient backend;
     private final boolean dryRun;
-
     private final Map<UUID, PendingDelete> pendingDeletes = new ConcurrentHashMap<>();
 
     public WorldCommandExecutor(JavaPlugin plugin, BackendClient backend, boolean dryRun) {
@@ -49,117 +47,180 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         }
 
         String root = args[0].toLowerCase(Locale.ROOT);
-        if ("confirm".equals(root)) {
-            return handleConfirm(player);
-        }
-
-        if ("template".equals(root)) {
-            if (args.length == 2 && "list".equalsIgnoreCase(args[1])) {
-                if (dryRun) {
-                    sender.sendMessage("[MCMM][DryRun] template list requested");
-                    return true;
-                }
-                try {
-                    BackendClient.BackendResponse response = backend.postTemplateList(player.getUniqueId().toString(), player.getName());
-                    player.sendMessage("[MCMM] status=" + response.statusCode());
-                    if (response.body() != null && !response.body().trim().isEmpty()) {
-                        player.sendMessage("[MCMM] " + response.body());
-                    }
-                } catch (IOException e) {
-                    plugin.getLogger().warning("backend request failed: " + e.getMessage());
-                    player.sendMessage("[MCMM] request failed: " + e.getMessage());
-                }
+        switch (root) {
+            case "help":
+                sendUsage(sender);
                 return true;
-            }
-            sender.sendMessage("Usage: /mcmm template list");
+            case "confirm":
+                return handleConfirm(player);
+            case "template":
+                return handleTemplate(player, args);
+            case "world":
+                return handleWorld(player, args);
+            case "instance":
+                return handleInstance(player, args);
+            default:
+                sendUsage(sender);
+                return true;
+        }
+    }
+
+    private boolean handleTemplate(Player player, String[] args) {
+        if (args.length == 2 && "list".equalsIgnoreCase(args[1])) {
+            return dispatch(player, new BackendClient.WorldAction("template_list", player.getUniqueId().toString(), player.getName()), "template list");
+        }
+        player.sendMessage("Usage: /mcmm template list");
+        return true;
+    }
+
+    private boolean handleWorld(Player player, String[] args) {
+        if (args.length < 2) {
+            sendUsage(player);
             return true;
         }
 
-        if (!"world".equals(root) || args.length < 2) {
-            sendUsage(sender);
-            return true;
+        String sub = args[1].toLowerCase(Locale.ROOT);
+        if ("request".equals(sub)) {
+            return handleWorldRequest(player, args);
         }
-
-        String worldOrAction = args[1].toLowerCase(Locale.ROOT);
-        String action;
-        String worldAlias = "";
-        String target = "";
-
-        if ("create".equals(worldOrAction)) {
-            action = "create";
-            if (args.length != 2) {
-                sender.sendMessage("Usage: /mcmm world create");
+        if ("list".equals(sub)) {
+            return dispatch(player, new BackendClient.WorldAction("world_list", player.getUniqueId().toString(), player.getName()), "world list");
+        }
+        if ("info".equals(sub)) {
+            BackendClient.WorldAction action = new BackendClient.WorldAction("world_info", player.getUniqueId().toString(), player.getName());
+            if (args.length >= 3) {
+                action.worldAlias(args[2]);
+            }
+            return dispatch(player, action, "world info");
+        }
+        if ("set".equals(sub)) {
+            if (args.length != 3 || (!"public".equalsIgnoreCase(args[2]) && !"privacy".equalsIgnoreCase(args[2]))) {
+                player.sendMessage("Usage: /mcmm world set <public|privacy>");
                 return true;
             }
-            return dispatch(player, action, worldAlias, target, "创建世界请求已发送（待后端返回链接和身份码）");
+            return dispatch(player,
+                    new BackendClient.WorldAction("world_set_access", player.getUniqueId().toString(), player.getName())
+                            .accessMode(args[2].toLowerCase(Locale.ROOT)),
+                    "world set access");
         }
-
-        worldAlias = args[1];
-        if (args.length >= 3 && "delete".equalsIgnoreCase(args[2])) {
+        if ("remove".equals(sub)) {
             if (args.length != 3) {
-                sender.sendMessage("Usage: /mcmm world <world_alias> delete");
+                player.sendMessage("Usage: /mcmm world remove <instance_id|alias>");
                 return true;
             }
-            PendingDelete pending = new PendingDelete(worldAlias, Instant.now().plusSeconds(DELETE_CONFIRM_TTL_SECONDS));
+            PendingDelete pending = new PendingDelete(args[2], Instant.now().plusSeconds(DELETE_CONFIRM_TTL_SECONDS));
             pendingDeletes.put(player.getUniqueId(), pending);
-            sender.sendMessage("[MCMM] 确认删除世界 \"" + worldAlias + "\" 吗？在30秒内输入 /mcmm confirm 确认。");
+            player.sendMessage("[MCMM] Confirm remove \"" + args[2] + "\" in 30s: /mcmm confirm");
             return true;
         }
 
+        // legacy style: /mcmm world <alias> add/remove user <name>
         if (args.length >= 5 &&
                 ("add".equalsIgnoreCase(args[2]) || "remove".equalsIgnoreCase(args[2])) &&
                 "user".equalsIgnoreCase(args[3])) {
-            action = "member_" + args[2].toLowerCase(Locale.ROOT);
-            target = args[4];
-            if (target.trim().isEmpty()) {
-                sender.sendMessage("Target user is required.");
-                return true;
-            }
-            String successHint = "member_add".equals(action)
-                    ? "已发送添加成员请求：" + target + " -> " + worldAlias
-                    : "已发送移除成员请求：" + target + " -> " + worldAlias;
-            return dispatch(player, action, worldAlias, target, successHint);
+            String action = "add".equalsIgnoreCase(args[2]) ? "member_add" : "member_remove";
+            return dispatch(player,
+                    new BackendClient.WorldAction(action, player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[1])
+                            .targetName(args[4]),
+                    action);
         }
 
-        sender.sendMessage("Unknown command pattern.");
-        sendUsage(sender);
+        sendUsage(player);
+        return true;
+    }
+
+    private boolean handleWorldRequest(Player player, String[] args) {
+        if (args.length < 3) {
+            player.sendMessage("Usage: /mcmm world request <create|list|approve|reject|cancel> ...");
+            return true;
+        }
+        String op = args[2].toLowerCase(Locale.ROOT);
+        switch (op) {
+            case "create":
+                if (args.length != 5) {
+                    player.sendMessage("Usage: /mcmm world request create <template_name> <world_alias>");
+                    return true;
+                }
+                return dispatch(player,
+                        new BackendClient.WorldAction("request_create", player.getUniqueId().toString(), player.getName())
+                                .templateName(args[3])
+                                .worldAlias(args[4]),
+                        "request create");
+            case "list":
+                return dispatch(player,
+                        new BackendClient.WorldAction("request_list", player.getUniqueId().toString(), player.getName()),
+                        "request list");
+            case "approve":
+                if (args.length != 4) {
+                    player.sendMessage("Usage: /mcmm world request approve <request_id>");
+                    return true;
+                }
+                return dispatch(player,
+                        new BackendClient.WorldAction("request_approve", player.getUniqueId().toString(), player.getName())
+                                .requestId(args[3]),
+                        "request approve");
+            case "reject":
+                if (args.length < 4) {
+                    player.sendMessage("Usage: /mcmm world request reject <request_id> [reason]");
+                    return true;
+                }
+                return dispatch(player,
+                        new BackendClient.WorldAction("request_reject", player.getUniqueId().toString(), player.getName())
+                                .requestId(args[3])
+                                .reason(joinTail(args, 4)),
+                        "request reject");
+            case "cancel":
+                if (args.length < 4) {
+                    player.sendMessage("Usage: /mcmm world request cancel <request_id> [reason]");
+                    return true;
+                }
+                return dispatch(player,
+                        new BackendClient.WorldAction("request_cancel", player.getUniqueId().toString(), player.getName())
+                                .requestId(args[3])
+                                .reason(joinTail(args, 4)),
+                        "request cancel");
+            default:
+                player.sendMessage("Unsupported world request action.");
+                return true;
+        }
+    }
+
+    private boolean handleInstance(Player player, String[] args) {
+        if (args.length == 2 && "list".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_list", player.getUniqueId().toString(), player.getName()),
+                    "instance list");
+        }
+        player.sendMessage("Usage: /mcmm instance list");
         return true;
     }
 
     private boolean handleConfirm(Player player) {
         PendingDelete pending = pendingDeletes.get(player.getUniqueId());
         if (pending == null) {
-            player.sendMessage("[MCMM] 当前没有待确认的删除请求。");
+            player.sendMessage("[MCMM] No pending remove confirmation.");
             return true;
         }
         if (Instant.now().isAfter(pending.expiresAt)) {
             pendingDeletes.remove(player.getUniqueId());
-            player.sendMessage("[MCMM] 删除确认已过期，请重新执行 /mcmm world <world_alias> delete");
+            player.sendMessage("[MCMM] Remove confirmation expired.");
             return true;
         }
-
         pendingDeletes.remove(player.getUniqueId());
-        return dispatch(player, "delete", pending.worldAlias, "", "已删除世界 \"" + pending.worldAlias + "\"（删除流程已提交）");
+        return dispatch(player,
+                new BackendClient.WorldAction("world_remove", player.getUniqueId().toString(), player.getName())
+                        .worldAlias(pending.worldAlias),
+                "world remove");
     }
 
-    private boolean dispatch(Player player, String action, String worldAlias, String target, String successHint) {
+    private boolean dispatch(Player player, BackendClient.WorldAction action, String summary) {
         if (dryRun) {
-            player.sendMessage("[MCMM][DryRun] " + successHint);
-            player.sendMessage("[MCMM][DryRun] action=" + action
-                    + ", actor=" + player.getName()
-                    + ", world_alias=" + worldAlias
-                    + ", target=" + target);
+            player.sendMessage("[MCMM][DryRun] " + summary);
             return true;
         }
-
         try {
-            BackendClient.BackendResponse response = backend.postWorldAction(
-                    action,
-                    player.getUniqueId().toString(),
-                    player.getName(),
-                    worldAlias,
-                    target
-            );
+            BackendClient.BackendResponse response = backend.postWorldAction(action);
             player.sendMessage("[MCMM] status=" + response.statusCode());
             if (response.body() != null && !response.body().trim().isEmpty()) {
                 player.sendMessage("[MCMM] " + response.body());
@@ -172,41 +233,83 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         }
     }
 
+    private static String joinTail(String[] args, int fromIndex) {
+        if (args.length <= fromIndex) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = fromIndex; i < args.length; i++) {
+            if (sb.length() > 0) {
+                sb.append(" ");
+            }
+            sb.append(args[i]);
+        }
+        return sb.toString();
+    }
+
     private static void sendUsage(CommandSender sender) {
-        sender.sendMessage("Usage: /mcmm world create");
+        sender.sendMessage("=== MCMM Commands ===");
+        sender.sendMessage("Usage: /mcmm world request create <template_name> <world_alias>");
+        sender.sendMessage("Usage: /mcmm world request list");
+        sender.sendMessage("Usage: /mcmm world request approve <request_id>");
+        sender.sendMessage("Usage: /mcmm world request reject <request_id> [reason]");
+        sender.sendMessage("Usage: /mcmm world request cancel <request_id> [reason]");
+        sender.sendMessage("Usage: /mcmm world remove <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm world list");
+        sender.sendMessage("Usage: /mcmm world set <public|privacy>");
+        sender.sendMessage("Usage: /mcmm world info [instance_id|alias]");
         sender.sendMessage("Usage: /mcmm world <world_alias> add user <user>");
         sender.sendMessage("Usage: /mcmm world <world_alias> remove user <user>");
-        sender.sendMessage("Usage: /mcmm world <world_alias> delete");
         sender.sendMessage("Usage: /mcmm template list");
+        sender.sendMessage("Usage: /mcmm instance list");
         sender.sendMessage("Usage: /mcmm confirm");
+        sender.sendMessage("Usage: /mcmm help");
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            String prefix = args[0].toLowerCase(Locale.ROOT);
-            List<String> out = new ArrayList<>();
-            for (String c : ROOT_SUBCOMMANDS) {
-                if (c.startsWith(prefix)) {
-                    out.add(c);
-                }
-            }
-            return out;
+            return prefixMatch(ROOT_SUBCOMMANDS, args[0]);
         }
-        if (args.length == 2 && "world".equalsIgnoreCase(args[0])) {
-            return Arrays.asList("create", "<world_alias>");
+        if ("template".equalsIgnoreCase(args[0]) && args.length == 2) {
+            return prefixMatch(Collections.singletonList("list"), args[1]);
         }
-        if (args.length == 2 && "template".equalsIgnoreCase(args[0])) {
-            return Collections.singletonList("list");
+        if ("instance".equalsIgnoreCase(args[0]) && args.length == 2) {
+            return prefixMatch(Collections.singletonList("list"), args[1]);
         }
-        if (args.length == 3 && "world".equalsIgnoreCase(args[0])) {
-            return WORLD_OPERATIONS;
+        if ("world".equalsIgnoreCase(args[0]) && args.length == 2) {
+            return prefixMatch(Arrays.asList("request", "list", "info", "set", "remove", "<world_alias>"), args[1]);
         }
-        if (args.length == 4 && "world".equalsIgnoreCase(args[0]) &&
+        if ("world".equalsIgnoreCase(args[0]) && args.length == 3 && "request".equalsIgnoreCase(args[1])) {
+            return prefixMatch(Arrays.asList("create", "list", "approve", "reject", "cancel"), args[2]);
+        }
+        if ("world".equalsIgnoreCase(args[0]) && args.length == 3 && "set".equalsIgnoreCase(args[1])) {
+            return prefixMatch(Arrays.asList("public", "privacy"), args[2]);
+        }
+        if ("world".equalsIgnoreCase(args[0]) && args.length == 3 && !isKeyword(args[1])) {
+            return prefixMatch(Arrays.asList("add", "remove"), args[2]);
+        }
+        if ("world".equalsIgnoreCase(args[0]) && args.length == 4 &&
                 ("add".equalsIgnoreCase(args[2]) || "remove".equalsIgnoreCase(args[2]))) {
-            return Collections.singletonList("user");
+            return prefixMatch(Collections.singletonList("user"), args[3]);
         }
         return Collections.emptyList();
+    }
+
+    private static boolean isKeyword(String s) {
+        String k = s.toLowerCase(Locale.ROOT);
+        return "request".equals(k) || "list".equals(k) || "info".equals(k) || "set".equals(k) || "remove".equals(k);
+    }
+
+    private static List<String> prefixMatch(List<String> candidates, String rawPrefix) {
+        String prefix = rawPrefix == null ? "" : rawPrefix.toLowerCase(Locale.ROOT);
+        List<String> out = new ArrayList<>();
+        for (String c : candidates) {
+            if (c.toLowerCase(Locale.ROOT).startsWith(prefix)) {
+                out.add(c);
+            }
+        }
+        return out;
     }
 
     private static final class PendingDelete {

@@ -276,6 +276,66 @@ func (r *ServerImageRepoI) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+type GameVersionRepoI struct{ connector SQLConnector }
+
+func NewGameVersionRepoI(connector SQLConnector) *GameVersionRepoI {
+	return &GameVersionRepoI{connector: connector}
+}
+
+func (r *GameVersionRepoI) UpsertCheckResult(ctx context.Context, version string, runtimeImageID sql.NullString, coreJar string, status string, checkMessage sql.NullString) error {
+	_, err := r.connector.ExecContext(ctx, `
+		INSERT INTO game_versions (game_version, runtime_image_id, core_jar, status, check_message, last_checked_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())
+		ON CONFLICT (game_version) DO UPDATE
+		SET runtime_image_id = EXCLUDED.runtime_image_id,
+		    core_jar = EXCLUDED.core_jar,
+		    status = EXCLUDED.status,
+		    check_message = EXCLUDED.check_message,
+		    last_checked_at = EXCLUDED.last_checked_at,
+		    updated_at = NOW()
+	`, version, runtimeImageID, coreJar, status, checkMessage)
+	return err
+}
+
+func (r *GameVersionRepoI) Read(ctx context.Context, version string) (GameVersion, error) {
+	var v GameVersion
+	err := r.connector.QueryRowContext(ctx, `
+		SELECT game_version, runtime_image_id, core_jar, status, check_message, last_checked_at, created_at, updated_at
+		FROM game_versions
+		WHERE game_version = $1
+	`, version).Scan(&v.GameVersion, &v.RuntimeImageID, &v.CoreJar, &v.Status, &v.CheckMessage, &v.LastCheckedAt, &v.CreatedAt, &v.UpdatedAt)
+	if err != nil {
+		return GameVersion{}, err
+	}
+	return v, nil
+}
+
+func (r *GameVersionRepoI) ListVerified(ctx context.Context) ([]GameVersion, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT game_version, runtime_image_id, core_jar, status, check_message, last_checked_at, created_at, updated_at
+		FROM game_versions
+		WHERE status = 'verified'
+		ORDER BY game_version DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]GameVersion, 0)
+	for rows.Next() {
+		var v GameVersion
+		if err := rows.Scan(&v.GameVersion, &v.RuntimeImageID, &v.CoreJar, &v.Status, &v.CheckMessage, &v.LastCheckedAt, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 type MapInstanceRepoI struct{ connector SQLConnector }
 
 func NewMapInstanceRepoI(connector SQLConnector) *MapInstanceRepoI {
@@ -291,15 +351,20 @@ func (r *MapInstanceRepoI) Create(ctx context.Context, inst MapInstance) (int64,
 	if accessMode == "" {
 		accessMode = "privacy"
 	}
+	healthStatus := inst.HealthStatus
+	if healthStatus == "" {
+		healthStatus = "unknown"
+	}
 	var id int64
 	err := r.connector.QueryRowContext(ctx, `
 		INSERT INTO map_instances (
 			alias, owner_id, template_id, source_type, game_version, access_mode, status,
+			health_status, last_error_msg, last_health_at,
 			created_at, updated_at, last_active_at, archived_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW(), $11, $12)
 		RETURNING id
-	`, alias, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, accessMode, inst.Status, inst.LastActiveAt, inst.ArchivedAt).Scan(&id)
+	`, alias, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, accessMode, inst.Status, healthStatus, inst.LastErrorMsg, inst.LastHealthAt, inst.LastActiveAt, inst.ArchivedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -309,7 +374,7 @@ func (r *MapInstanceRepoI) Create(ctx context.Context, inst MapInstance) (int64,
 func (r *MapInstanceRepoI) Read(ctx context.Context, id int64) (MapInstance, error) {
 	var inst MapInstance
 	err := r.connector.QueryRowContext(ctx, `
-		SELECT id, alias, owner_id, template_id, source_type, game_version, access_mode, status, created_at, updated_at, last_active_at, archived_at
+		SELECT id, alias, owner_id, template_id, source_type, game_version, access_mode, status, health_status, last_error_msg, last_health_at, created_at, updated_at, last_active_at, archived_at
 		FROM map_instances WHERE id = $1
 	`, id).Scan(
 		&inst.ID,
@@ -320,6 +385,9 @@ func (r *MapInstanceRepoI) Read(ctx context.Context, id int64) (MapInstance, err
 		&inst.GameVersion,
 		&inst.AccessMode,
 		&inst.Status,
+		&inst.HealthStatus,
+		&inst.LastErrorMsg,
+		&inst.LastHealthAt,
 		&inst.CreatedAt,
 		&inst.UpdatedAt,
 		&inst.LastActiveAt,
@@ -329,6 +397,91 @@ func (r *MapInstanceRepoI) Read(ctx context.Context, id int64) (MapInstance, err
 		return MapInstance{}, err
 	}
 	return inst, nil
+}
+
+func (r *MapInstanceRepoI) ReadByAlias(ctx context.Context, alias string) (MapInstance, error) {
+	var inst MapInstance
+	err := r.connector.QueryRowContext(ctx, `
+		SELECT id, alias, owner_id, template_id, source_type, game_version, access_mode, status, health_status, last_error_msg, last_health_at, created_at, updated_at, last_active_at, archived_at
+		FROM map_instances WHERE alias = $1
+	`, alias).Scan(
+		&inst.ID,
+		&inst.Alias,
+		&inst.OwnerID,
+		&inst.TemplateID,
+		&inst.SourceType,
+		&inst.GameVersion,
+		&inst.AccessMode,
+		&inst.Status,
+		&inst.HealthStatus,
+		&inst.LastErrorMsg,
+		&inst.LastHealthAt,
+		&inst.CreatedAt,
+		&inst.UpdatedAt,
+		&inst.LastActiveAt,
+		&inst.ArchivedAt,
+	)
+	if err != nil {
+		return MapInstance{}, err
+	}
+	return inst, nil
+}
+
+func (r *MapInstanceRepoI) ListByOwner(ctx context.Context, ownerID int64) ([]MapInstance, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, alias, owner_id, template_id, source_type, game_version, access_mode, status, health_status, last_error_msg, last_health_at, created_at, updated_at, last_active_at, archived_at
+		FROM map_instances
+		WHERE owner_id = $1
+		ORDER BY id DESC
+	`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]MapInstance, 0)
+	for rows.Next() {
+		var inst MapInstance
+		if err := rows.Scan(
+			&inst.ID, &inst.Alias, &inst.OwnerID, &inst.TemplateID, &inst.SourceType,
+			&inst.GameVersion, &inst.AccessMode, &inst.Status, &inst.HealthStatus, &inst.LastErrorMsg, &inst.LastHealthAt, &inst.CreatedAt, &inst.UpdatedAt,
+			&inst.LastActiveAt, &inst.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, inst)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *MapInstanceRepoI) List(ctx context.Context) ([]MapInstance, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, alias, owner_id, template_id, source_type, game_version, access_mode, status, health_status, last_error_msg, last_health_at, created_at, updated_at, last_active_at, archived_at
+		FROM map_instances
+		ORDER BY id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]MapInstance, 0)
+	for rows.Next() {
+		var inst MapInstance
+		if err := rows.Scan(
+			&inst.ID, &inst.Alias, &inst.OwnerID, &inst.TemplateID, &inst.SourceType,
+			&inst.GameVersion, &inst.AccessMode, &inst.Status, &inst.HealthStatus, &inst.LastErrorMsg, &inst.LastHealthAt, &inst.CreatedAt, &inst.UpdatedAt,
+			&inst.LastActiveAt, &inst.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, inst)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *MapInstanceRepoI) Update(ctx context.Context, inst MapInstance) error {
@@ -345,11 +498,14 @@ func (r *MapInstanceRepoI) Update(ctx context.Context, inst MapInstance) error {
 		    game_version = $6,
 		    access_mode = $7,
 		    status = $8,
+		    health_status = $9,
+		    last_error_msg = $10,
+		    last_health_at = $11,
 		    updated_at = NOW(),
-		    last_active_at = $9,
-		    archived_at = $10
+		    last_active_at = $12,
+		    archived_at = $13
 		WHERE id = $1
-	`, inst.ID, inst.Alias, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, accessMode, inst.Status, inst.LastActiveAt, inst.ArchivedAt)
+	`, inst.ID, inst.Alias, inst.OwnerID, inst.TemplateID, inst.SourceType, inst.GameVersion, accessMode, inst.Status, inst.HealthStatus, inst.LastErrorMsg, inst.LastHealthAt, inst.LastActiveAt, inst.ArchivedAt)
 	return err
 }
 
@@ -387,6 +543,32 @@ func (r *InstanceMemberRepoI) Read(ctx context.Context, id int64) (InstanceMembe
 		return InstanceMember{}, err
 	}
 	return member, nil
+}
+
+func (r *InstanceMemberRepoI) ListByInstance(ctx context.Context, instanceID int64) ([]InstanceMember, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, instance_id, user_id, role, created_at
+		FROM instance_members
+		WHERE instance_id = $1
+		ORDER BY id ASC
+	`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]InstanceMember, 0)
+	for rows.Next() {
+		var m InstanceMember
+		if err := rows.Scan(&m.ID, &m.InstanceID, &m.UserID, &m.Role, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *InstanceMemberRepoI) Update(ctx context.Context, member InstanceMember) error {
@@ -497,6 +679,78 @@ func (r *UserRequestRepoI) ReadByRequestID(ctx context.Context, requestID string
 	return req, nil
 }
 
+func (r *UserRequestRepoI) ListByActor(ctx context.Context, actorUserID int64, limit int) ([]UserRequest, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, request_id, request_type, actor_user_id, target_instance_id, template_id,
+		       requested_alias, status, reviewed_by_user_id, review_note, response_payload,
+		       error_code, error_msg, expires_at, created_at, updated_at
+		FROM user_requests
+		WHERE actor_user_id = $1
+		ORDER BY id DESC
+		LIMIT $2
+	`, actorUserID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]UserRequest, 0)
+	for rows.Next() {
+		var req UserRequest
+		if err := rows.Scan(
+			&req.ID, &req.RequestID, &req.RequestType, &req.ActorUserID, &req.TargetInstanceID, &req.TemplateID,
+			&req.RequestedAlias, &req.Status, &req.ReviewedByUserID, &req.ReviewNote, &req.ResponsePayload,
+			&req.ErrorCode, &req.ErrorMsg, &req.ExpiresAt, &req.CreatedAt, &req.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, req)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *UserRequestRepoI) ListPending(ctx context.Context, limit int) ([]UserRequest, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, request_id, request_type, actor_user_id, target_instance_id, template_id,
+		       requested_alias, status, reviewed_by_user_id, review_note, response_payload,
+		       error_code, error_msg, expires_at, created_at, updated_at
+		FROM user_requests
+		WHERE status = 'pending'
+		ORDER BY id DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]UserRequest, 0)
+	for rows.Next() {
+		var req UserRequest
+		if err := rows.Scan(
+			&req.ID, &req.RequestID, &req.RequestType, &req.ActorUserID, &req.TargetInstanceID, &req.TemplateID,
+			&req.RequestedAlias, &req.Status, &req.ReviewedByUserID, &req.ReviewNote, &req.ResponsePayload,
+			&req.ErrorCode, &req.ErrorMsg, &req.ExpiresAt, &req.CreatedAt, &req.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, req)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *UserRequestRepoI) Update(ctx context.Context, req UserRequest) error {
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE user_requests
@@ -585,6 +839,7 @@ func (r *UserRequestRepoI) MarkRequestResult(
 var _ UserRepo = (*UserRepoI)(nil)
 var _ MapTemplateRepo = (*MapTemplateRepoI)(nil)
 var _ ServerImageRepo = (*ServerImageRepoI)(nil)
+var _ GameVersionRepo = (*GameVersionRepoI)(nil)
 var _ MapInstanceRepo = (*MapInstanceRepoI)(nil)
 var _ InstanceMemberRepo = (*InstanceMemberRepoI)(nil)
 var _ UserRequestRepo = (*UserRequestRepoI)(nil)

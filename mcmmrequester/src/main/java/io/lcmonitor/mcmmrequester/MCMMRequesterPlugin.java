@@ -10,10 +10,10 @@ public final class MCMMRequesterPlugin extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
 
-        String baseUrl = getConfig().getString("backend.base-url", "http://127.0.0.1:18080");
+        String baseUrl = getConfig().getString("backend.base-url", "http://mcmm-api:8080");
         String token = getConfig().getString("backend.token", "");
         int timeoutMs = getConfig().getInt("backend.timeout-ms", 5000);
-        boolean dryRun = getConfig().getBoolean("backend.dry-run", true);
+        boolean dryRun = getConfig().getBoolean("backend.dry-run", false);
 
         BackendClient backendClient = new BackendClient(baseUrl, token, timeoutMs);
         mcmmCommandExecutor = new WorldCommandExecutor(this, backendClient, dryRun);
@@ -27,6 +27,7 @@ public final class MCMMRequesterPlugin extends JavaPlugin {
 
         cmd.setExecutor(mcmmCommandExecutor);
         cmd.setTabCompleter(mcmmCommandExecutor);
+        getServer().getPluginManager().registerEvents(new PlayerJoinListener(this, backendClient, dryRun), this);
 
         getLogger().info("MCMMRequester enabled. backend=" + baseUrl + ", dryRun=" + dryRun);
     }
