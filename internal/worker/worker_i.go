@@ -221,6 +221,26 @@ func (w *WorkerI) configureInstanceAccess(ctx context.Context, inst pgsql.MapIns
 	}
 
 	processed := map[string]struct{}{}
+	// Grant all DB admins OP+whitelist on each instance.
+	admins, err := w.repos.User.ListByRole(ctx, "admin")
+	if err != nil {
+		return err
+	}
+	if len(admins) == 0 {
+		w.logger.Warnf("instance=%d no admin users found in DB", inst.ID)
+	} else {
+		names := make([]string, 0, len(admins))
+		for _, a := range admins {
+			names = append(names, a.MCName)
+		}
+		w.logger.Infof("instance=%d granting admin access to %d users: %s", inst.ID, len(admins), strings.Join(names, ","))
+	}
+	for _, a := range admins {
+		if err := allowAndOpUser(ctx, conn, inst.ID, a.MCName, processed, w.logger); err != nil {
+			return err
+		}
+	}
+	// Backward compatibility: ensure configured bootstrap admin is also granted.
 	admin := strings.TrimSpace(w.opts.BootstrapAdminName)
 	if admin != "" {
 		if err := allowAndOpUser(ctx, conn, inst.ID, admin, processed, w.logger); err != nil {

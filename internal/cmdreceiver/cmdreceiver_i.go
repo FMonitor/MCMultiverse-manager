@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"mcmm/internal/log"
 	"mcmm/internal/pgsql"
+	"mcmm/internal/servertap"
 	"mcmm/internal/worker"
 )
 
@@ -98,13 +101,29 @@ type ServiceI struct {
 	repos              pgsql.Repos
 	worker             worker.Worker
 	defaultGameVersion string
+	lobbyTapURL        string
+	serverTapKey       string
+	serverTapAuthName  string
+	logger             interface {
+		Infof(string, ...any)
+		Warnf(string, ...any)
+		Errorf(string, ...any)
+	}
 }
 
-func NewServiceI(repos pgsql.Repos, w worker.Worker, defaultGameVersion string) *ServiceI {
+func NewServiceI(repos pgsql.Repos, w worker.Worker, defaultGameVersion string, lobbyTapURL string, serverTapAuthName string, serverTapKey string) *ServiceI {
 	if defaultGameVersion == "" {
 		defaultGameVersion = "1.21.1"
 	}
-	return &ServiceI{repos: repos, worker: w, defaultGameVersion: defaultGameVersion}
+	return &ServiceI{
+		repos:              repos,
+		worker:             w,
+		defaultGameVersion: defaultGameVersion,
+		lobbyTapURL:        strings.TrimSpace(lobbyTapURL),
+		serverTapAuthName:  strings.TrimSpace(serverTapAuthName),
+		serverTapKey:       strings.TrimSpace(serverTapKey),
+		logger:             log.Component("cmdreceiver"),
+	}
 }
 
 func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandRequest) (int, WorldCommandResponse) {
@@ -128,7 +147,16 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 
 	actor, err := s.ensureActor(ctx, req.ActorUUID, req.ActorName)
 	if err != nil {
+		s.logger.Errorf("load actor failed action=%s actor=%s uuid=%s err=%v", req.Action, req.ActorName, req.ActorUUID, err)
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "load actor failed"}
+	}
+	s.logger.Infof(
+		"world_cmd actor=%s uuid=%s role=%s action=%s req_id=%s world=%s target=%s template=%s access=%s",
+		actor.MCName, actor.MCUUID, actor.ServerRole, req.Action, req.RequestID, req.WorldAlias, req.Target, req.TemplateName, req.AccessMode,
+	)
+	if isOpOnlyAction(req.Action) && !isAdmin(actor) {
+		s.logger.Warnf("world_cmd forbidden actor=%s uuid=%s role=%s action=%s", actor.MCName, actor.MCUUID, actor.ServerRole, req.Action)
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
 	}
 
 	switch req.Action {
@@ -146,6 +174,8 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 		return s.handleWorldList(ctx, actor)
 	case "world_info":
 		return s.handleWorldInfo(ctx, req, actor)
+	case "world_join":
+		return s.handleWorldJoin(ctx, req, actor)
 	case "world_set_access":
 		return s.handleWorldSetAccess(ctx, req, actor)
 	case "world_remove", "delete":
@@ -171,37 +201,40 @@ func (s *ServiceI) HandlePlayerJoin(ctx context.Context, actorUUID string, actor
 	if actorUUID == "" || actorName == "" {
 		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "missing actor_uuid or actor_name"}
 	}
+	s.logger.Infof("player_join actor=%s uuid=%s", actorName, actorUUID)
 	user, err := s.ensureActor(ctx, actorUUID, actorName)
 	if err != nil {
+		s.logger.Errorf("player_join upsert failed actor=%s uuid=%s err=%v", actorName, actorUUID, err)
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "upsert user failed"}
 	}
-	if user.MCName != actorName {
-		user.MCName = actorName
-		if err := s.repos.User.Update(ctx, user); err != nil {
-			return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "update player name failed"}
-		}
-	}
+	s.logger.Infof("player_join synced actor=%s uuid=%s user_id=%d role=%s", actorName, actorUUID, user.ID, user.ServerRole)
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("player synced id=%d", user.ID)}
 }
 
 func (s *ServiceI) handleRequestCreate(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
-	if req.TemplateName == "" {
-		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "template_name is required"}
-	}
 	if req.WorldAlias == "" {
 		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "world_alias is required"}
 	}
+	finalAlias := buildOwnedAlias(actor.MCName, req.WorldAlias)
 	if req.RequestID == "" {
 		req.RequestID = newUUIDLike()
 	}
 
-	if _, err := s.repos.MapInstance.ReadByAlias(ctx, req.WorldAlias); err == nil {
+	if _, err := s.repos.MapInstance.ReadByAlias(ctx, finalAlias); err == nil {
 		return http.StatusConflict, WorldCommandResponse{Status: "error", Message: "world_alias already exists"}
 	}
 
-	template, err := s.repos.MapTemplate.ReadByTag(ctx, req.TemplateName)
-	if err != nil {
-		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "template not found"}
+	var (
+		template   pgsql.MapTemplate
+		templateID sql.NullInt64
+		err        error
+	)
+	if req.TemplateName != "" {
+		template, err = s.resolveTemplate(ctx, req.TemplateName)
+		if err != nil {
+			return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "template not found"}
+		}
+		templateID = sql.NullInt64{Int64: template.ID, Valid: true}
 	}
 
 	ur, err := s.repos.UserRequest.ReadByRequestID(ctx, req.RequestID)
@@ -212,24 +245,25 @@ func (s *ServiceI) handleRequestCreate(ctx context.Context, req WorldCommandRequ
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "read request failed"}
 	}
 
-	_, err = s.repos.UserRequest.Create(ctx, pgsql.UserRequest{
+	requestNo, err := s.repos.UserRequest.Create(ctx, pgsql.UserRequest{
 		RequestID:      req.RequestID,
 		RequestType:    "world_create",
 		ActorUserID:    actor.ID,
-		TemplateID:     sql.NullInt64{Int64: template.ID, Valid: true},
-		RequestedAlias: sql.NullString{String: req.WorldAlias, Valid: true},
+		TemplateID:     templateID,
+		RequestedAlias: sql.NullString{String: finalAlias, Valid: true},
 		Status:         "pending",
 		ResponsePayload: json.RawMessage(
-			fmt.Sprintf(`{"template":"%s","world_alias":"%s"}`, template.Tag, req.WorldAlias),
+			fmt.Sprintf(`{"template":"%s","world_alias":"%s"}`, req.TemplateName, finalAlias),
 		),
 	})
 	if err != nil {
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "create request failed"}
 	}
+	_ = s.notifyLobbyAdminsRequestCreated(ctx, actor.MCName, finalAlias, req.TemplateName, requestNo, req.RequestID)
 
 	return http.StatusOK, WorldCommandResponse{
 		Status:  "accepted",
-		Message: fmt.Sprintf("request created, request_id=%s", req.RequestID),
+		Message: fmt.Sprintf("request created, request_no=%d, request_id=%s, world_alias=%s", requestNo, req.RequestID, finalAlias),
 	}
 }
 
@@ -252,7 +286,21 @@ func (s *ServiceI) handleRequestList(ctx context.Context, actor pgsql.User) (int
 	}
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, fmt.Sprintf("%s:%s", r.RequestID, r.Status))
+		actorName := fmt.Sprintf("uid:%d", r.ActorUserID)
+		if u, uErr := s.repos.User.Read(ctx, r.ActorUserID); uErr == nil {
+			actorName = u.MCName
+		}
+		worldAlias := "-"
+		if r.RequestedAlias.Valid {
+			worldAlias = r.RequestedAlias.String
+		}
+		templateName := "empty"
+		if r.TemplateID.Valid {
+			if t, tErr := s.repos.MapTemplate.Read(ctx, r.TemplateID.Int64); tErr == nil {
+				templateName = fmt.Sprintf("#%d:%s", t.ID, t.Tag)
+			}
+		}
+		out = append(out, fmt.Sprintf("#%d:%s player=%s world=%s template=%s", r.ID, r.Status, actorName, worldAlias, templateName))
 	}
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: strings.Join(out, ", ")}
 }
@@ -262,9 +310,9 @@ func (s *ServiceI) handleRequestApprove(ctx context.Context, req WorldCommandReq
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
 	}
 	if req.RequestID == "" {
-		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_id is required"}
+		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_id_or_no is required"}
 	}
-	ur, err := s.repos.UserRequest.ReadByRequestID(ctx, req.RequestID)
+	ur, err := s.resolveUserRequest(ctx, req.RequestID)
 	if err != nil {
 		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "request not found"}
 	}
@@ -274,14 +322,10 @@ func (s *ServiceI) handleRequestApprove(ctx context.Context, req WorldCommandReq
 	if ur.RequestType != "world_create" {
 		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_type is not world_create"}
 	}
-	if !ur.TemplateID.Valid || !ur.RequestedAlias.Valid {
+	if !ur.RequestedAlias.Valid {
 		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request payload incomplete"}
 	}
 
-	template, err := s.repos.MapTemplate.Read(ctx, ur.TemplateID.Int64)
-	if err != nil {
-		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "template not found"}
-	}
 	ur.Status = "processing"
 	ur.ReviewedByUserID = sql.NullInt64{Int64: actor.ID, Valid: true}
 	ur.TargetInstanceID = sql.NullInt64{}
@@ -289,18 +333,43 @@ func (s *ServiceI) handleRequestApprove(ctx context.Context, req WorldCommandReq
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "update request failed"}
 	}
 
-	instanceID, err := s.repos.MapInstance.Create(ctx, pgsql.MapInstance{
+	go s.processApproveAsync(ur)
+	return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("request #%d accepted, processing started", ur.ID)}
+}
+
+func (s *ServiceI) processApproveAsync(ur pgsql.UserRequest) {
+	ctx := context.Background()
+
+	instance := pgsql.MapInstance{
 		Alias:       ur.RequestedAlias.String,
 		OwnerID:     ur.ActorUserID,
 		TemplateID:  ur.TemplateID,
-		SourceType:  "template",
-		GameVersion: template.GameVersion,
+		SourceType:  "empty",
+		GameVersion: s.defaultGameVersion,
 		AccessMode:  "privacy",
 		Status:      string(worker.StatusWaiting),
-	})
+	}
+
+	var (
+		template pgsql.MapTemplate
+		err      error
+	)
+	if ur.TemplateID.Valid {
+		template, err = s.repos.MapTemplate.Read(ctx, ur.TemplateID.Int64)
+		if err != nil {
+			_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"load_template"}`), sql.NullString{String: "db_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
+			s.notifyApproveResult(ctx, ur, false, 0, "template not found")
+			return
+		}
+		instance.SourceType = "template"
+		instance.GameVersion = template.GameVersion
+	}
+
+	instanceID, err := s.repos.MapInstance.Create(ctx, instance)
 	if err != nil {
-		_ = s.repos.UserRequest.MarkRequestResult(ctx, req.RequestID, "failed", json.RawMessage(`{"step":"create_instance_row"}`), sql.NullString{String: "db_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "create instance failed"}
+		_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"create_instance_row"}`), sql.NullString{String: "db_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
+		s.notifyApproveResult(ctx, ur, false, 0, "create instance failed")
+		return
 	}
 	_, _ = s.repos.InstanceMember.Create(ctx, pgsql.InstanceMember{
 		InstanceID: instanceID,
@@ -308,12 +377,21 @@ func (s *ServiceI) handleRequestApprove(ctx context.Context, req WorldCommandReq
 		Role:       "owner",
 	})
 
-	if err := s.worker.StartFromTemplate(ctx, instanceID, template); err != nil {
-		_ = s.repos.UserRequest.MarkRequestResult(ctx, req.RequestID, "failed", json.RawMessage(`{"step":"start_template"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "worker start failed"}
+	if ur.TemplateID.Valid {
+		if err := s.worker.StartFromTemplate(ctx, instanceID, template); err != nil {
+			_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"start_template"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
+			s.notifyApproveResult(ctx, ur, false, instanceID, "start template failed")
+			return
+		}
+	} else {
+		if err := s.worker.StartEmpty(ctx, instanceID, instance.GameVersion); err != nil {
+			_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"start_empty"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
+			s.notifyApproveResult(ctx, ur, false, instanceID, "start empty failed")
+			return
+		}
 	}
-	_ = s.repos.UserRequest.MarkRequestResult(ctx, req.RequestID, "succeeded", json.RawMessage(fmt.Sprintf(`{"instance_id":%d}`, instanceID)), sql.NullString{}, sql.NullString{})
-	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("request approved, instance_id=%d", instanceID)}
+	_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "succeeded", json.RawMessage(fmt.Sprintf(`{"instance_id":%d}`, instanceID)), sql.NullString{}, sql.NullString{})
+	s.notifyApproveResult(ctx, ur, true, instanceID, "")
 }
 
 func (s *ServiceI) handleRequestReject(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -321,9 +399,9 @@ func (s *ServiceI) handleRequestReject(ctx context.Context, req WorldCommandRequ
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
 	}
 	if req.RequestID == "" {
-		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_id is required"}
+		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_id_or_no is required"}
 	}
-	ur, err := s.repos.UserRequest.ReadByRequestID(ctx, req.RequestID)
+	ur, err := s.resolveUserRequest(ctx, req.RequestID)
 	if err != nil {
 		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "request not found"}
 	}
@@ -343,9 +421,9 @@ func (s *ServiceI) handleRequestReject(ctx context.Context, req WorldCommandRequ
 
 func (s *ServiceI) handleRequestCancel(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
 	if req.RequestID == "" {
-		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_id is required"}
+		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "request_id_or_no is required"}
 	}
-	ur, err := s.repos.UserRequest.ReadByRequestID(ctx, req.RequestID)
+	ur, err := s.resolveUserRequest(ctx, req.RequestID)
 	if err != nil {
 		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "request not found"}
 	}
@@ -380,7 +458,7 @@ func (s *ServiceI) handleTemplateList(ctx context.Context) (int, WorldCommandRes
 	lines := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
 		t := templates[i]
-		lines = append(lines, fmt.Sprintf("%s (%s)", t.Tag, t.GameVersion))
+		lines = append(lines, fmt.Sprintf("#%d:%s (%s)", t.ID, t.Tag, t.GameVersion))
 	}
 	msg := "templates: " + strings.Join(lines, ", ")
 	if len(templates) > limit {
@@ -575,6 +653,23 @@ func (s *ServiceI) handleWorldInfo(ctx context.Context, req WorldCommandRequest,
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: msg}
 }
 
+func (s *ServiceI) handleWorldJoin(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+	inst, err := s.resolveInstance(ctx, req.WorldAlias)
+	if err != nil {
+		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
+	}
+	if inst.Status != string(worker.StatusOn) {
+		return http.StatusConflict, WorldCommandResponse{Status: "error", Message: "instance is not On"}
+	}
+	if !s.canJoinInstance(ctx, actor, inst) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "join denied"}
+	}
+	if err := s.sendPlayerToInstance(ctx, actor.MCName, inst.ID); err != nil {
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "send player failed"}
+	}
+	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("joining #%d:%s", inst.ID, inst.Alias)}
+}
+
 func (s *ServiceI) handleInstanceList(ctx context.Context, actor pgsql.User) (int, WorldCommandResponse) {
 	if !isAdmin(actor) {
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
@@ -594,16 +689,44 @@ func (s *ServiceI) handleInstanceList(ctx context.Context, actor pgsql.User) (in
 }
 
 func (s *ServiceI) ensureActor(ctx context.Context, actorUUID, actorName string) (pgsql.User, error) {
+	actorUUID = strings.TrimSpace(actorUUID)
+	actorName = strings.TrimSpace(actorName)
+	if actorName == "" {
+		actorName = "unknown"
+	}
+
 	u, err := s.repos.User.ReadByUUID(ctx, actorUUID)
 	if err == nil {
+		if u.MCName != actorName {
+			oldName := u.MCName
+			u.MCName = actorName
+			if upErr := s.repos.User.Update(ctx, u); upErr != nil {
+				s.logger.Warnf("ensure_actor rename failed user_id=%d uuid=%s old=%s new=%s err=%v", u.ID, actorUUID, oldName, actorName, upErr)
+			} else {
+				s.logger.Infof("ensure_actor renamed user_id=%d uuid=%s old=%s new=%s", u.ID, actorUUID, oldName, actorName)
+			}
+		}
+		s.logger.Infof("ensure_actor hit_by_uuid user_id=%d actor=%s uuid=%s role=%s", u.ID, actorName, actorUUID, u.ServerRole)
 		return u, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return pgsql.User{}, err
 	}
-	if strings.TrimSpace(actorName) == "" {
-		actorName = "unknown"
+
+	byName, nameErr := s.repos.User.ReadByName(ctx, actorName)
+	if nameErr == nil {
+		oldUUID := byName.MCUUID
+		byName.MCUUID = actorUUID
+		if upErr := s.repos.User.Update(ctx, byName); upErr != nil {
+			return pgsql.User{}, upErr
+		}
+		s.logger.Warnf("ensure_actor rebound_uuid user_id=%d actor=%s old_uuid=%s new_uuid=%s", byName.ID, actorName, oldUUID, actorUUID)
+		return byName, nil
 	}
+	if !errors.Is(nameErr, sql.ErrNoRows) {
+		return pgsql.User{}, nameErr
+	}
+
 	id, err := s.repos.User.Create(ctx, pgsql.User{
 		MCUUID:     actorUUID,
 		MCName:     actorName,
@@ -612,7 +735,12 @@ func (s *ServiceI) ensureActor(ctx context.Context, actorUUID, actorName string)
 	if err != nil {
 		return pgsql.User{}, err
 	}
-	return s.repos.User.Read(ctx, id)
+	created, err := s.repos.User.Read(ctx, id)
+	if err != nil {
+		return pgsql.User{}, err
+	}
+	s.logger.Infof("ensure_actor created user_id=%d actor=%s uuid=%s role=%s", created.ID, actorName, actorUUID, created.ServerRole)
+	return created, nil
 }
 
 func canManage(actor pgsql.User, ownerID int64) bool {
@@ -621,6 +749,34 @@ func canManage(actor pgsql.User, ownerID int64) bool {
 
 func isAdmin(actor pgsql.User) bool {
 	return actor.ServerRole == "admin"
+}
+
+func isOpOnlyAction(action string) bool {
+	switch action {
+	case "request_approve", "request_reject", "instance_list":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *ServiceI) canJoinInstance(ctx context.Context, actor pgsql.User, inst pgsql.MapInstance) bool {
+	if actor.ServerRole == "admin" || actor.ID == inst.OwnerID {
+		return true
+	}
+	if strings.EqualFold(inst.AccessMode, "public") {
+		return true
+	}
+	members, err := s.repos.InstanceMember.ListByInstance(ctx, inst.ID)
+	if err != nil {
+		return false
+	}
+	for _, m := range members {
+		if m.UserID == actor.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ServiceI) resolveInstance(ctx context.Context, ident string) (pgsql.MapInstance, error) {
@@ -638,6 +794,140 @@ func parseInstanceID(alias string) (int64, error) {
 	s := strings.TrimSpace(alias)
 	s = strings.TrimPrefix(s, "inst-")
 	return strconv.ParseInt(s, 10, 64)
+}
+
+func (s *ServiceI) resolveUserRequest(ctx context.Context, ident string) (pgsql.UserRequest, error) {
+	ident = strings.TrimSpace(ident)
+	if ident == "" {
+		return pgsql.UserRequest{}, sql.ErrNoRows
+	}
+	if id, err := strconv.ParseInt(ident, 10, 64); err == nil {
+		return s.repos.UserRequest.Read(ctx, id)
+	}
+	return s.repos.UserRequest.ReadByRequestID(ctx, ident)
+}
+
+func (s *ServiceI) resolveTemplate(ctx context.Context, ident string) (pgsql.MapTemplate, error) {
+	ident = strings.TrimSpace(ident)
+	if ident == "" {
+		return pgsql.MapTemplate{}, sql.ErrNoRows
+	}
+	if id, err := strconv.ParseInt(ident, 10, 64); err == nil {
+		return s.repos.MapTemplate.Read(ctx, id)
+	}
+	return s.repos.MapTemplate.ReadByTag(ctx, ident)
+}
+
+func buildOwnedAlias(ownerName string, rawAlias string) string {
+	owner := strings.TrimSpace(ownerName)
+	alias := strings.TrimSpace(rawAlias)
+	if owner == "" {
+		owner = "user"
+	}
+	if alias == "" {
+		alias = "world"
+	}
+	return owner + "_" + alias
+}
+
+func (s *ServiceI) notifyLobbyAdminsRequestCreated(
+	ctx context.Context,
+	actorName string,
+	worldAlias string,
+	templateName string,
+	requestNo int64,
+	requestID string,
+) error {
+	if s.lobbyTapURL == "" {
+		return nil
+	}
+	conn, err := servertap.NewConnectorWithAuth(s.lobbyTapURL, 5*time.Second, s.serverTapAuthName, s.serverTapKey)
+	if err != nil {
+		return err
+	}
+	admins, err := s.repos.User.ListByRole(ctx, "admin")
+	if err != nil {
+		return err
+	}
+	if len(admins) == 0 {
+		return nil
+	}
+	tpl := strings.TrimSpace(templateName)
+	if tpl == "" {
+		tpl = "empty"
+	}
+	msg := fmt.Sprintf("[MCMM] req#%d from %s world=%s template=%s", requestNo, actorName, worldAlias, tpl)
+	names := make([]string, 0, len(admins))
+	for _, a := range admins {
+		names = append(names, a.MCName)
+	}
+	if err := s.notifyPlayersViaLobbyTap(ctx, conn, names, msg); err != nil {
+		s.logger.Warnf("notify admins failed req=%d/%s err=%v", requestNo, requestID, err)
+	}
+	return nil
+}
+
+func (s *ServiceI) notifyApproveResult(ctx context.Context, ur pgsql.UserRequest, success bool, instanceID int64, reason string) {
+	if s.lobbyTapURL == "" {
+		return
+	}
+	conn, err := servertap.NewConnectorWithAuth(s.lobbyTapURL, 5*time.Second, s.serverTapAuthName, s.serverTapKey)
+	if err != nil {
+		return
+	}
+	admins, err := s.repos.User.ListByRole(ctx, "admin")
+	if err != nil {
+		return
+	}
+	names := make([]string, 0, len(admins)+1)
+	for _, a := range admins {
+		names = append(names, a.MCName)
+	}
+	if owner, err := s.repos.User.Read(ctx, ur.ActorUserID); err == nil {
+		names = append(names, owner.MCName)
+	}
+	msg := ""
+	if success {
+		msg = fmt.Sprintf("[MCMM] req#%d approved and started: instance=%d", ur.ID, instanceID)
+	} else {
+		msg = fmt.Sprintf("[MCMM] req#%d failed: %s", ur.ID, reason)
+	}
+	_ = s.notifyPlayersViaLobbyTap(ctx, conn, names, msg)
+}
+
+func (s *ServiceI) notifyPlayersViaLobbyTap(ctx context.Context, conn *servertap.Connector, names []string, msg string) error {
+	sent := map[string]struct{}{}
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := sent[key]; ok {
+			continue
+		}
+		cmd := servertap.NewCommandBuilder("tell").Arg(name).RawArg(msg).Build()
+		if _, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: cmd}); err != nil {
+			s.logger.Warnf("notify player failed player=%s err=%v", name, err)
+			continue
+		}
+		sent[key] = struct{}{}
+	}
+	return nil
+}
+
+func (s *ServiceI) sendPlayerToInstance(ctx context.Context, playerName string, instanceID int64) error {
+	if s.lobbyTapURL == "" {
+		return fmt.Errorf("lobby servertap not configured")
+	}
+	conn, err := servertap.NewConnectorWithAuth(s.lobbyTapURL, 5*time.Second, s.serverTapAuthName, s.serverTapKey)
+	if err != nil {
+		return err
+	}
+	serverName := fmt.Sprintf("mcmm-inst-%d", instanceID)
+	cmd := servertap.NewCommandBuilder("send").Arg(playerName).Arg(serverName).Build()
+	_, err = conn.Execute(ctx, servertap.ExecuteRequest{Command: cmd})
+	return err
 }
 
 func newUUIDLike() string {

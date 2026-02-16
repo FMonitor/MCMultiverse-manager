@@ -37,10 +37,34 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - mcmm-network
-    ports:
-      - "30002:8080"
     depends_on:
       - db
+    restart: unless-stopped
+
+  lobby:
+    build:
+      context: ./MultiMap-main-1.21.1
+      dockerfile: Dockerfile
+    container_name: mcmm-lobby
+    working_dir: /data
+    volumes:
+      - ./MultiMap-main-1.21.1:/data:rw
+    networks:
+      - mcmm-network
+    restart: unless-stopped
+
+  bungee:
+    build:
+      context: ./Multimap-bungee
+      dockerfile: Dockerfile
+    container_name: mcmm-bungee
+    working_dir: /data
+    volumes:
+      - ./Multimap-bungee:/data:rw
+    networks:
+      - mcmm-network
+    ports:
+      - "30001:25565"
     restart: unless-stopped
 
 

@@ -52,9 +52,8 @@ var componentColorMap = map[string]string{
 	"config":      ansiPink,
 	"pgsql":       ansiCyan,
 	"servertap":   ansiLime,
-	"repo":        ansiTeal,
+	"cmdreceiver": ansiTeal,
 	"webservice":  ansiPink,
-	"repo_c_test": ansiOrange,
 }
 
 var colorPresetMap = map[string]string{

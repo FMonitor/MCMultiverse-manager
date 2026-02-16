@@ -6,9 +6,12 @@ authors: [LCMonitor]
 commands:
   mcmm:
     description: MCMM command entrypoint
-    usage: "/mcmm world request/create/list/set/info/remove ... | /mcmm template list | /mcmm instance list | /mcmm confirm | /mcmm help"
+    usage: "/mcmm req ... | /mcmm world ... | /mcmm template list | /mcmm instance list | /mcmm confirm | /mcmm help"
     permission: mcmmrequester.use
 permissions:
   mcmmrequester.use:
     description: Allows player to use /mcmm commands
     default: true
+  mcmmrequester.admin:
+    description: Shows admin command suggestions in /mcmm tab completion
+    default: op

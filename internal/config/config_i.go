@@ -15,7 +15,6 @@ import (
 type Config struct {
 	HTTPAddr            string         `yaml:"http_addr"`
 	DBURL               string         `yaml:"database_url"`
-	ServerTap           string         `yaml:"servertap_url"`
 	LobbyServerTapURL   string         `yaml:"lobby_servertap_url"`
 	ServerTapKey        string         `yaml:"servertap_key"`
 	ServerTapAuthHeader string         `yaml:"servertap_auth_header"`
@@ -105,12 +104,6 @@ func (c *Config) Validate() error {
 	if c.BootstrapAdminUUID == "" {
 		c.BootstrapAdminUUID = "00000000-0000-4000-8000-000000000001"
 	}
-	if c.LobbyServerTapURL == "" {
-		c.LobbyServerTapURL = c.ServerTap
-	}
-	if c.ServerTap == "" {
-		c.ServerTap = c.LobbyServerTapURL
-	}
 	if c.MiniServerTapPort <= 0 {
 		c.MiniServerTapPort = 4567
 	}
@@ -120,8 +113,8 @@ func (c *Config) Validate() error {
 	if c.InstanceNetwork == "" {
 		c.InstanceNetwork = "mcmm-network"
 	}
-	if len(c.Servers) == 0 && c.ServerTap == "" && c.LobbyServerTapURL == "" {
-		return errors.New("lobby_servertap_url (or servertap_url) is required when servers is empty")
+	if len(c.Servers) == 0 && c.LobbyServerTapURL == "" {
+		return errors.New("lobby_servertap_url is required when servers is empty")
 	}
 	for i, s := range c.Servers {
 		if s.ID == "" {

@@ -51,3 +51,5 @@ libraries/
 
 MultiMap*/
 archived/
+
+restart_all.sh

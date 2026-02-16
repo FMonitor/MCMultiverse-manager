@@ -63,6 +63,32 @@ func (r *UserRepoI) ReadByName(ctx context.Context, mcName string) (User, error)
 	return user, nil
 }
 
+func (r *UserRepoI) ListByRole(ctx context.Context, role string) ([]User, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, mc_uuid, mc_name, server_role, created_at
+		FROM users
+		WHERE LOWER(server_role) = LOWER($1)
+		ORDER BY id ASC
+	`, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.MCUUID, &u.MCName, &u.ServerRole, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *UserRepoI) Update(ctx context.Context, user User) error {
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE users

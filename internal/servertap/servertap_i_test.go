@@ -60,12 +60,12 @@ func TestConnector_ExecuteMVList_WithConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config failed: %v", err)
 	}
-	logger.Infof("using servertap_url=%s", cfg.ServerTap)
+	logger.Infof("using lobby_servertap_url=%s", cfg.LobbyServerTapURL)
 	if strings.TrimSpace(cfg.ServerTapKey) == "" {
 		t.Skip("servertap_key is empty in config/config.yml")
 	}
 
-	connector, err := NewConnectorWithAuth(cfg.ServerTap, 10*time.Second, cfg.ServerTapAuthHeader, cfg.ServerTapKey)
+	connector, err := NewConnectorWithAuth(cfg.LobbyServerTapURL, 10*time.Second, cfg.ServerTapAuthHeader, cfg.ServerTapKey)
 	if err != nil {
 		t.Fatalf("create connector failed: %v", err)
 	}

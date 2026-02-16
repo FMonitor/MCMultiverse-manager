@@ -81,25 +81,16 @@ func main() {
 	}
 	logger.Info("[ok] Worker initialized")
 
-	logger.Info("[step] Verifying lobby ServerTap connectivity")
-	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer verifyCancel()
-	if err := verifyLobbyServerTap(verifyCtx, cfg, logger); err != nil {
-		logger.Warnf("[warn] Lobby ServerTap check failed: %v", err)
-	} else {
-		logger.Info("[ok] Lobby ServerTap reachable")
-	}
-
-	logger.Info("[step] Runtime bootstrap self-check")
-	if err := bootstrapRuntimeSelfCheck(context.Background(), cfg, repos, workerSvc, logger); err != nil {
-		logger.Errorf("runtime bootstrap self-check failed: %v", err)
-	} else {
-		logger.Info("[ok] Runtime bootstrap self-check completed")
-	}
-
 	logger.Info("[step] Starting HTTP server")
 	mux := http.NewServeMux()
-	cmdService := cmdreceiver.NewServiceI(repos, workerSvc, defaultGameVersion)
+	cmdService := cmdreceiver.NewServiceI(
+		repos,
+		workerSvc,
+		defaultGameVersion,
+		cfg.LobbyServerTapURL,
+		cfg.ServerTapAuthHeader,
+		cfg.ServerTapKey,
+	)
 	cmdHandler := cmdreceiver.NewHandlerI(cmdService)
 	cmdHandler.Register(mux)
 	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
@@ -107,6 +98,26 @@ func main() {
 		logger.Infof("[ok] HTTP listening on %s", cfg.HTTPAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
+
+	// Run slow bootstrap tasks after HTTP is already serving,
+	// so player join events are accepted during version scanning.
+	go func() {
+		logger.Info("[step] Verifying lobby ServerTap by admin access setup")
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer verifyCancel()
+		if err := ensureLobbyAdminAccess(verifyCtx, cfg, repos, logger); err != nil {
+			logger.Warnf("[warn] Lobby ServerTap admin setup failed: %v", err)
+		} else {
+			logger.Info("[ok] Lobby ServerTap reachable and admin commands applied")
+		}
+
+		logger.Info("[step] Runtime bootstrap self-check")
+		if err := bootstrapRuntimeSelfCheck(context.Background(), cfg, repos, workerSvc, logger); err != nil {
+			logger.Errorf("runtime bootstrap self-check failed: %v", err)
+		} else {
+			logger.Info("[ok] Runtime bootstrap self-check completed")
 		}
 	}()
 
@@ -149,20 +160,48 @@ func ensureDirs(dirs []string) error {
 	return nil
 }
 
-func verifyLobbyServerTap(ctx context.Context, cfg config.Config, logger interface {
+func ensureLobbyAdminAccess(ctx context.Context, cfg config.Config, repos pgsql.Repos, logger interface {
 	Infof(string, ...any)
 	Warnf(string, ...any)
 	Errorf(string, ...any)
 }) error {
-	conn, err := servertap.NewConnectorWithAuth(cfg.LobbyServerTapURL, 5*time.Second, cfg.ServerTapAuthHeader, cfg.ServerTapKey)
+	conn, err := servertap.NewConnectorWithAuth(cfg.LobbyServerTapURL, 6*time.Second, cfg.ServerTapAuthHeader, cfg.ServerTapKey)
 	if err != nil {
 		return err
 	}
-	resp, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "list"})
+
+	admins, err := repos.User.ListByRole(ctx, "admin")
 	if err != nil {
+		return fmt.Errorf("load admin users: %w", err)
+	}
+	if len(admins) == 0 && strings.TrimSpace(cfg.BootstrapAdminName) != "" {
+		admins = append(admins, pgsql.User{MCName: strings.TrimSpace(cfg.BootstrapAdminName), ServerRole: "admin"})
+	}
+	if len(admins) == 0 {
+		return fmt.Errorf("no admin user found")
+	}
+
+	// Lobby should remain open for players; do not enable whitelist.
+	if _, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "whitelist off"}); err != nil {
 		return err
 	}
-	logger.Infof("[main] lobby servertap command=list status=%d body_bytes=%d", resp.StatusCode, len(resp.RawBody))
+
+	seen := map[string]struct{}{}
+	for _, a := range admins {
+		name := strings.TrimSpace(a.MCName)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		if _, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "op " + name}); err != nil {
+			return err
+		}
+		seen[key] = struct{}{}
+	}
+	logger.Infof("[main] lobby whitelist disabled; op granted to %d admin users", len(seen))
 	return nil
 }
 

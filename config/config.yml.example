@@ -1,7 +1,6 @@
 http_addr: ":8080"
 database_url: "postgres://mcmm:mcmm@db:5432/mcmmdb?sslmode=disable"
-lobby_servertap_url: "http://127.0.0.1:4567"
-servertap_url: "http://127.0.0.1:4567" # legacy fallback, keep same as lobby_servertap_url
+lobby_servertap_url: "http://mcmm-lobby:4567"
 servertap_key: ""
 servertap_auth_header: "key"
 mini_servertap_port: 4567
