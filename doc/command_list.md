@@ -22,7 +22,7 @@
 
 | 指令 | 权限 | 说明 |
 | --- | --- | --- |
-| `/mcmm world list` | 玩家 | 列出自己拥有的世界。 |
+| `/mcmm world list` | 玩家 | 列出自己可加入的世界（owner/member/public）。 |
 | `/mcmm world <instance_id\|alias>` | 玩家 | 加入世界（短 id 或别名都可）。 |
 | `/mcmm world info [instance_id\|alias]` | 玩家 | 查看世界信息。 |
 | `/mcmm world set <public\|privacy>` | owner/OP | 设置访问模式。 |

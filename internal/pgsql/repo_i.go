@@ -597,6 +597,32 @@ func (r *InstanceMemberRepoI) ListByInstance(ctx context.Context, instanceID int
 	return out, nil
 }
 
+func (r *InstanceMemberRepoI) ListByUser(ctx context.Context, userID int64) ([]InstanceMember, error) {
+	rows, err := r.connector.QueryContext(ctx, `
+		SELECT id, instance_id, user_id, role, created_at
+		FROM instance_members
+		WHERE user_id = $1
+		ORDER BY id ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]InstanceMember, 0)
+	for rows.Next() {
+		var m InstanceMember
+		if err := rows.Scan(&m.ID, &m.InstanceID, &m.UserID, &m.Role, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *InstanceMemberRepoI) Update(ctx context.Context, member InstanceMember) error {
 	_, err := r.connector.ExecContext(ctx, `
 		UPDATE instance_members

@@ -1,6 +1,0 @@
-Logging started at 2026-02-17T04:09:28.759926501Z
-[authlib-injector] [INFO] Version: 1.2.5
-[authlib-injector] [INFO] Authentication server: https://littleskin.cn
-[authlib-injector] [INFO] Redirect to: https://littleskin.cn/api/yggdrasil
-[authlib-injector] [INFO] Httpd is running on port 39951
-[authlib-injector] [INFO] Transformed [com.velocitypowered.proxy.connection.client.InitialLoginSessionHandler] with [Constant URL Transformer]

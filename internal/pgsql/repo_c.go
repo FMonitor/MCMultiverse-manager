@@ -57,6 +57,7 @@ type InstanceMemberRepo interface {
 	Create(ctx context.Context, member InstanceMember) (int64, error)
 	Read(ctx context.Context, id int64) (InstanceMember, error)
 	ListByInstance(ctx context.Context, instanceID int64) ([]InstanceMember, error)
+	ListByUser(ctx context.Context, userID int64) ([]InstanceMember, error)
 	Update(ctx context.Context, member InstanceMember) error
 	Delete(ctx context.Context, id int64) error
 	DeleteByInstanceAndUser(ctx context.Context, instanceID int64, userID int64) error

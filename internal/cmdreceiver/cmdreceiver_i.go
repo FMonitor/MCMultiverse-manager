@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -633,16 +634,63 @@ func (s *ServiceI) handleMemberRemove(ctx context.Context, req WorldCommandReque
 }
 
 func (s *ServiceI) handleWorldList(ctx context.Context, actor pgsql.User) (int, WorldCommandResponse) {
-	list, err := s.repos.MapInstance.ListByOwner(ctx, actor.ID)
+	all, err := s.repos.MapInstance.List(ctx)
 	if err != nil {
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "list worlds failed"}
 	}
-	if len(list) == 0 {
+	members, err := s.repos.InstanceMember.ListByUser(ctx, actor.ID)
+	if err != nil {
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "list world members failed"}
+	}
+	memberSet := make(map[int64]string, len(members))
+	for _, m := range members {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if role == "" {
+			role = "member"
+		}
+		memberSet[m.InstanceID] = role
+	}
+
+	type worldView struct {
+		id     int64
+		alias  string
+		status string
+		role   string
+	}
+	picked := make(map[int64]worldView)
+	for _, inst := range all {
+		role := ""
+		switch {
+		case inst.OwnerID == actor.ID:
+			role = "owner"
+		case memberSet[inst.ID] != "":
+			role = "member"
+		case strings.EqualFold(inst.AccessMode, "public") && inst.Status == string(worker.StatusOn):
+			role = "public"
+		}
+		if role == "" {
+			continue
+		}
+		picked[inst.ID] = worldView{
+			id:     inst.ID,
+			alias:  inst.Alias,
+			status: inst.Status,
+			role:   role,
+		}
+	}
+
+	if len(picked) == 0 {
 		return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "no worlds"}
 	}
-	items := make([]string, 0, len(list))
-	for _, inst := range list {
-		items = append(items, fmt.Sprintf("%d:%s:%s", inst.ID, inst.Alias, inst.Status))
+	rows := make([]worldView, 0, len(picked))
+	for _, v := range picked {
+		rows = append(rows, v)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].id < rows[j].id })
+
+	items := make([]string, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, fmt.Sprintf("%d:%s:%s(%s)", r.id, r.alias, r.status, r.role))
 	}
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: strings.Join(items, ", ")}
 }
