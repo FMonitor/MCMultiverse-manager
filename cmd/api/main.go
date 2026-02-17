@@ -90,6 +90,9 @@ func main() {
 		cfg.LobbyServerTapURL,
 		cfg.ServerTapAuthHeader,
 		cfg.ServerTapKey,
+		cfg.ProxyBridgeURL,
+		cfg.ProxyAuthHeader,
+		cfg.ProxyAuthToken,
 	)
 	cmdHandler := cmdreceiver.NewHandlerI(cmdService)
 	cmdHandler.Register(mux)

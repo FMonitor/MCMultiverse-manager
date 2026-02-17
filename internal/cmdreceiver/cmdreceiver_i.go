@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -104,6 +106,9 @@ type ServiceI struct {
 	lobbyTapURL        string
 	serverTapKey       string
 	serverTapAuthName  string
+	proxyBridgeURL     string
+	proxyAuthHeader    string
+	proxyAuthToken     string
 	logger             interface {
 		Infof(string, ...any)
 		Warnf(string, ...any)
@@ -111,9 +116,22 @@ type ServiceI struct {
 	}
 }
 
-func NewServiceI(repos pgsql.Repos, w worker.Worker, defaultGameVersion string, lobbyTapURL string, serverTapAuthName string, serverTapKey string) *ServiceI {
+func NewServiceI(
+	repos pgsql.Repos,
+	w worker.Worker,
+	defaultGameVersion string,
+	lobbyTapURL string,
+	serverTapAuthName string,
+	serverTapKey string,
+	proxyBridgeURL string,
+	proxyAuthHeader string,
+	proxyAuthToken string,
+) *ServiceI {
 	if defaultGameVersion == "" {
 		defaultGameVersion = "1.21.1"
+	}
+	if strings.TrimSpace(proxyAuthHeader) == "" {
+		proxyAuthHeader = "Authorization"
 	}
 	return &ServiceI{
 		repos:              repos,
@@ -122,6 +140,9 @@ func NewServiceI(repos pgsql.Repos, w worker.Worker, defaultGameVersion string, 
 		lobbyTapURL:        strings.TrimSpace(lobbyTapURL),
 		serverTapAuthName:  strings.TrimSpace(serverTapAuthName),
 		serverTapKey:       strings.TrimSpace(serverTapKey),
+		proxyBridgeURL:     strings.TrimRight(strings.TrimSpace(proxyBridgeURL), "/"),
+		proxyAuthHeader:    strings.TrimSpace(proxyAuthHeader),
+		proxyAuthToken:     strings.TrimSpace(proxyAuthToken),
 		logger:             log.Component("cmdreceiver"),
 	}
 }
@@ -186,6 +207,14 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 		return s.handleMemberRemove(ctx, req, actor)
 	case "instance_list":
 		return s.handleInstanceList(ctx, actor)
+	case "instance_create":
+		return s.handleInstanceCreate(ctx, req, actor)
+	case "instance_stop":
+		return s.handleInstanceStop(ctx, req, actor)
+	case "instance_remove":
+		return s.handleInstanceRemove(ctx, req, actor)
+	case "instance_lockdown":
+		return s.handleInstanceLockdown(ctx, req, actor)
 	case "template_list":
 		return s.handleTemplateList(ctx)
 	case "create_legacy":
@@ -263,7 +292,12 @@ func (s *ServiceI) handleRequestCreate(ctx context.Context, req WorldCommandRequ
 
 	return http.StatusOK, WorldCommandResponse{
 		Status:  "accepted",
-		Message: fmt.Sprintf("request created, request_no=%d, request_id=%s, world_alias=%s", requestNo, req.RequestID, finalAlias),
+		Message: fmt.Sprintf(
+			"request created: #%d world=%s template=%s",
+			requestNo,
+			finalAlias,
+			displayTemplate(req.TemplateName),
+		),
 	}
 }
 
@@ -334,7 +368,15 @@ func (s *ServiceI) handleRequestApprove(ctx context.Context, req WorldCommandReq
 	}
 
 	go s.processApproveAsync(ur)
-	return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("request #%d accepted, processing started", ur.ID)}
+	return http.StatusAccepted, WorldCommandResponse{
+		Status: "accepted",
+		Message: fmt.Sprintf(
+			"request #%d approved, creating world=%s template=%s",
+			ur.ID,
+			strOrDefault(ur.RequestedAlias, "-"),
+			s.resolveTemplateDisplayByID(ctx, ur.TemplateID),
+		),
+	}
 }
 
 func (s *ServiceI) processApproveAsync(ur pgsql.UserRequest) {
@@ -358,7 +400,7 @@ func (s *ServiceI) processApproveAsync(ur pgsql.UserRequest) {
 		template, err = s.repos.MapTemplate.Read(ctx, ur.TemplateID.Int64)
 		if err != nil {
 			_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"load_template"}`), sql.NullString{String: "db_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-			s.notifyApproveResult(ctx, ur, false, 0, "template not found")
+			s.notifyApproveResult(ctx, ur, false, 0, "template not found", ur.RequestedAlias.String, "unknown")
 			return
 		}
 		instance.SourceType = "template"
@@ -368,7 +410,7 @@ func (s *ServiceI) processApproveAsync(ur pgsql.UserRequest) {
 	instanceID, err := s.repos.MapInstance.Create(ctx, instance)
 	if err != nil {
 		_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"create_instance_row"}`), sql.NullString{String: "db_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-		s.notifyApproveResult(ctx, ur, false, 0, "create instance failed")
+		s.notifyApproveResult(ctx, ur, false, 0, "create instance failed", ur.RequestedAlias.String, displayTemplate(template.Tag))
 		return
 	}
 	_, _ = s.repos.InstanceMember.Create(ctx, pgsql.InstanceMember{
@@ -380,18 +422,18 @@ func (s *ServiceI) processApproveAsync(ur pgsql.UserRequest) {
 	if ur.TemplateID.Valid {
 		if err := s.worker.StartFromTemplate(ctx, instanceID, template); err != nil {
 			_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"start_template"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-			s.notifyApproveResult(ctx, ur, false, instanceID, "start template failed")
+			s.notifyApproveResult(ctx, ur, false, instanceID, "start template failed", instance.Alias, displayTemplate(template.Tag))
 			return
 		}
 	} else {
 		if err := s.worker.StartEmpty(ctx, instanceID, instance.GameVersion); err != nil {
 			_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "failed", json.RawMessage(`{"step":"start_empty"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-			s.notifyApproveResult(ctx, ur, false, instanceID, "start empty failed")
+			s.notifyApproveResult(ctx, ur, false, instanceID, "start empty failed", instance.Alias, "empty")
 			return
 		}
 	}
 	_ = s.repos.UserRequest.MarkRequestResult(ctx, ur.RequestID, "succeeded", json.RawMessage(fmt.Sprintf(`{"instance_id":%d}`, instanceID)), sql.NullString{}, sql.NullString{})
-	s.notifyApproveResult(ctx, ur, true, instanceID, "")
+	s.notifyApproveResult(ctx, ur, true, instanceID, "", instance.Alias, displayTemplate(template.Tag))
 }
 
 func (s *ServiceI) handleRequestReject(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -688,6 +730,107 @@ func (s *ServiceI) handleInstanceList(ctx context.Context, actor pgsql.User) (in
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: strings.Join(items, ", ")}
 }
 
+func (s *ServiceI) handleInstanceCreate(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+	if !isAdmin(actor) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
+	}
+	if req.WorldAlias == "" {
+		return http.StatusBadRequest, WorldCommandResponse{Status: "error", Message: "world_alias is required"}
+	}
+	finalAlias := buildOwnedAlias(actor.MCName, req.WorldAlias)
+	if _, err := s.repos.MapInstance.ReadByAlias(ctx, finalAlias); err == nil {
+		return http.StatusConflict, WorldCommandResponse{Status: "error", Message: "world_alias already exists"}
+	}
+
+	instance := pgsql.MapInstance{
+		Alias:       finalAlias,
+		OwnerID:     actor.ID,
+		SourceType:  "empty",
+		GameVersion: s.defaultGameVersion,
+		AccessMode:  "privacy",
+		Status:      string(worker.StatusWaiting),
+	}
+	var template pgsql.MapTemplate
+	if req.TemplateName != "" {
+		t, err := s.resolveTemplate(ctx, req.TemplateName)
+		if err != nil {
+			return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "template not found"}
+		}
+		template = t
+		instance.TemplateID = sql.NullInt64{Int64: template.ID, Valid: true}
+		instance.SourceType = "template"
+		instance.GameVersion = template.GameVersion
+	}
+
+	instanceID, err := s.repos.MapInstance.Create(ctx, instance)
+	if err != nil {
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "create instance failed"}
+	}
+	_, _ = s.repos.InstanceMember.Create(ctx, pgsql.InstanceMember{InstanceID: instanceID, UserID: actor.ID, Role: "owner"})
+
+	go func() {
+		runCtx := context.Background()
+		var runErr error
+		if instance.TemplateID.Valid {
+			runErr = s.worker.StartFromTemplate(runCtx, instanceID, template)
+		} else {
+			runErr = s.worker.StartEmpty(runCtx, instanceID, instance.GameVersion)
+		}
+		if runErr != nil {
+			s.logger.Errorf("instance_create failed instance=%d alias=%s err=%v", instanceID, finalAlias, runErr)
+			return
+		}
+		s.logger.Infof("instance_create done instance=%d alias=%s", instanceID, finalAlias)
+	}()
+
+	return http.StatusAccepted, WorldCommandResponse{
+		Status: "accepted",
+		Message: fmt.Sprintf(
+			"instance creating: id=%d world=%s template=%s. join with: /mcmm world %d",
+			instanceID,
+			finalAlias,
+			displayTemplate(template.Tag),
+			instanceID,
+		),
+	}
+}
+
+func (s *ServiceI) handleInstanceStop(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+	if !isAdmin(actor) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
+	}
+	return http.StatusNotImplemented, WorldCommandResponse{Status: "error", Message: "instance stop not implemented yet; use instance remove"}
+}
+
+func (s *ServiceI) handleInstanceRemove(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+	if !isAdmin(actor) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
+	}
+	inst, err := s.resolveInstance(ctx, req.WorldAlias)
+	if err != nil {
+		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
+	}
+	go func() {
+		runCtx := context.Background()
+		if err := s.worker.StopAndArchive(runCtx, inst.ID); err != nil {
+			s.logger.Errorf("instance_remove failed instance=%d alias=%s err=%v", inst.ID, inst.Alias, err)
+			return
+		}
+		s.logger.Infof("instance_remove done instance=%d alias=%s", inst.ID, inst.Alias)
+	}()
+	return http.StatusAccepted, WorldCommandResponse{
+		Status:  "accepted",
+		Message: fmt.Sprintf("instance remove started: #%d %s", inst.ID, inst.Alias),
+	}
+}
+
+func (s *ServiceI) handleInstanceLockdown(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+	if !isAdmin(actor) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
+	}
+	return http.StatusNotImplemented, WorldCommandResponse{Status: "error", Message: "instance lockdown not implemented yet"}
+}
+
 func (s *ServiceI) ensureActor(ctx context.Context, actorUUID, actorName string) (pgsql.User, error) {
 	actorUUID = strings.TrimSpace(actorUUID)
 	actorName = strings.TrimSpace(actorName)
@@ -867,7 +1010,15 @@ func (s *ServiceI) notifyLobbyAdminsRequestCreated(
 	return nil
 }
 
-func (s *ServiceI) notifyApproveResult(ctx context.Context, ur pgsql.UserRequest, success bool, instanceID int64, reason string) {
+func (s *ServiceI) notifyApproveResult(
+	ctx context.Context,
+	ur pgsql.UserRequest,
+	success bool,
+	instanceID int64,
+	reason string,
+	worldAlias string,
+	templateName string,
+) {
 	if s.lobbyTapURL == "" {
 		return
 	}
@@ -888,7 +1039,14 @@ func (s *ServiceI) notifyApproveResult(ctx context.Context, ur pgsql.UserRequest
 	}
 	msg := ""
 	if success {
-		msg = fmt.Sprintf("[MCMM] req#%d approved and started: instance=%d", ur.ID, instanceID)
+		msg = fmt.Sprintf(
+			"[MCMM] req#%d approved. world=%s template=%s instance=%d. Use /mcmm world %d to join",
+			ur.ID,
+			worldAlias,
+			displayTemplate(templateName),
+			instanceID,
+			instanceID,
+		)
 	} else {
 		msg = fmt.Sprintf("[MCMM] req#%d failed: %s", ur.ID, reason)
 	}
@@ -917,6 +1075,17 @@ func (s *ServiceI) notifyPlayersViaLobbyTap(ctx context.Context, conn *servertap
 }
 
 func (s *ServiceI) sendPlayerToInstance(ctx context.Context, playerName string, instanceID int64) error {
+	if s.proxyBridgeURL != "" {
+		serverID := fmt.Sprintf("mcmm-inst-%d", instanceID)
+		if err := s.proxyRegister(ctx, serverID, serverID, 25565); err != nil {
+			return fmt.Errorf("proxy register failed: %w", err)
+		}
+		if err := s.proxySend(ctx, playerName, serverID); err != nil {
+			return fmt.Errorf("proxy send failed: %w", err)
+		}
+		return nil
+	}
+
 	if s.lobbyTapURL == "" {
 		return fmt.Errorf("lobby servertap not configured")
 	}
@@ -930,6 +1099,50 @@ func (s *ServiceI) sendPlayerToInstance(ctx context.Context, playerName string, 
 	return err
 }
 
+func (s *ServiceI) proxyRegister(ctx context.Context, serverID, host string, port int) error {
+	values := url.Values{}
+	values.Set("server_id", serverID)
+	values.Set("host", host)
+	values.Set("port", strconv.Itoa(port))
+	return s.proxyPostForm(ctx, "/v1/proxy/register", values)
+}
+
+func (s *ServiceI) proxySend(ctx context.Context, playerName, serverID string) error {
+	values := url.Values{}
+	values.Set("player", playerName)
+	values.Set("server_id", serverID)
+	return s.proxyPostForm(ctx, "/v1/proxy/send", values)
+}
+
+func (s *ServiceI) proxyPostForm(ctx context.Context, path string, values url.Values) error {
+	client := &http.Client{Timeout: 6 * time.Second}
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		s.proxyBridgeURL+path,
+		strings.NewReader(values.Encode()),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if s.proxyAuthHeader != "" && s.proxyAuthToken != "" {
+		req.Header.Set(s.proxyAuthHeader, "Bearer "+s.proxyAuthToken)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	s.logger.Infof("proxy_api %s ok status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+	return nil
+}
+
 func newUUIDLike() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
@@ -937,6 +1150,32 @@ func newUUIDLike() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(b)
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
+func displayTemplate(name string) string {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return "empty"
+	}
+	return n
+}
+
+func strOrDefault(v sql.NullString, d string) string {
+	if v.Valid && strings.TrimSpace(v.String) != "" {
+		return v.String
+	}
+	return d
+}
+
+func (s *ServiceI) resolveTemplateDisplayByID(ctx context.Context, id sql.NullInt64) string {
+	if !id.Valid {
+		return "empty"
+	}
+	t, err := s.repos.MapTemplate.Read(ctx, id.Int64)
+	if err != nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("#%d:%s", t.ID, t.Tag)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

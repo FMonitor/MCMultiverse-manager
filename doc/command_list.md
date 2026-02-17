@@ -40,6 +40,10 @@
 | --- | --- | --- |
 | `/mcmm template list` | 玩家 | 列模板（含 `#id:tag (version)`）。 |
 | `/mcmm instance list` | OP | 列出所有实例。 |
+| `/mcmm instance create <world_alias> [template_id\|template_name]` | OP | 直接创建实例（绕过申请）。 |
+| `/mcmm instance stop <instance_id\|alias>` | OP | 停止实例（预留，当前未实现）。 |
+| `/mcmm instance remove <instance_id\|alias>` | OP | 归档并下线实例。 |
+| `/mcmm instance lockdown <instance_id\|alias>` | OP | 锁定实例（预留，当前未实现）。 |
 | `/mcmm confirm` | 玩家 | 确认删除。 |
 | `/mcmm help` | 玩家 | 显示帮助。 |
 
@@ -60,3 +64,7 @@
 | `member_remove` | `world <alias> remove user` |
 | `template_list` | `template list` |
 | `instance_list` | `instance list` |
+| `instance_create` | `instance create` |
+| `instance_stop` | `instance stop` |
+| `instance_remove` | `instance remove` |
+| `instance_lockdown` | `instance lockdown` |

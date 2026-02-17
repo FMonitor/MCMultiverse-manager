@@ -16,6 +16,9 @@ type Config struct {
 	HTTPAddr            string         `yaml:"http_addr"`
 	DBURL               string         `yaml:"database_url"`
 	LobbyServerTapURL   string         `yaml:"lobby_servertap_url"`
+	ProxyBridgeURL      string         `yaml:"proxy_bridge_url"`
+	ProxyAuthHeader     string         `yaml:"proxy_auth_header"`
+	ProxyAuthToken      string         `yaml:"proxy_auth_token"`
 	ServerTapKey        string         `yaml:"servertap_key"`
 	ServerTapAuthHeader string         `yaml:"servertap_auth_header"`
 	MiniServerTapPort   int            `yaml:"mini_servertap_port"`
@@ -116,6 +119,9 @@ func (c *Config) Validate() error {
 	if len(c.Servers) == 0 && c.LobbyServerTapURL == "" {
 		return errors.New("lobby_servertap_url is required when servers is empty")
 	}
+	if c.ProxyAuthHeader == "" {
+		c.ProxyAuthHeader = "Authorization"
+	}
 	for i, s := range c.Servers {
 		if s.ID == "" {
 			return fmt.Errorf("servers[%d].id is required", i)
@@ -137,6 +143,7 @@ func LogSummary(cfg Config) {
 	logger := ilog.Component("config")
 	logger.Infof("runtime paths: template=%s version=%s instance=%s archive=%s", cfg.TemplateRootPath, cfg.VersionRootPath, cfg.InstanceRootPath, cfg.ArchiveRootPath)
 	logger.Infof("servertap lobby=%s mini_pattern=%s instance_network=%s", cfg.LobbyServerTapURL, cfg.MiniTapHostPattern, cfg.InstanceNetwork)
+	logger.Infof("proxy bridge url=%s auth_header=%s", cfg.ProxyBridgeURL, cfg.ProxyAuthHeader)
 	if cfg.ServerTapAuthHeader == "" {
 		logger.Warnf("servertap_auth_header is empty, fallback should be 'key'")
 	} else {

@@ -53,14 +53,14 @@ services:
       - mcmm-network
     restart: unless-stopped
 
-  bungee:
+  velocity:
     build:
-      context: ./Multimap-bungee
+      context: ./Multimap-velocity
       dockerfile: Dockerfile
-    container_name: mcmm-bungee
+    container_name: mcmm-velocity
     working_dir: /data
     volumes:
-      - ./Multimap-bungee:/data:rw
+      - ./Multimap-velocity:/data:rw
     networks:
       - mcmm-network
     ports:

@@ -18,10 +18,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class WorldCommandExecutor implements CommandExecutor, TabCompleter {
     private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("req", "world", "template", "instance", "confirm", "help");
     private static final long DELETE_CONFIRM_TTL_SECONDS = 30;
+    private static final Pattern MESSAGE_PATTERN = Pattern.compile("\"message\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
 
     private final JavaPlugin plugin;
     private final BackendClient backend;
@@ -199,7 +202,33 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
                     new BackendClient.WorldAction("instance_list", player.getUniqueId().toString(), player.getName()),
                     "instance list");
         }
-        player.sendMessage("Usage: /mcmm instance list");
+        if (args.length >= 3 && "create".equalsIgnoreCase(args[1])) {
+            BackendClient.WorldAction action = new BackendClient.WorldAction("instance_create", player.getUniqueId().toString(), player.getName())
+                    .worldAlias(args[2]);
+            if (args.length >= 4) {
+                action.templateName(args[3]);
+            }
+            return dispatch(player, action, "instance create");
+        }
+        if (args.length == 3 && "remove".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_remove", player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "instance remove");
+        }
+        if (args.length == 3 && "stop".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_stop", player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "instance stop");
+        }
+        if (args.length == 3 && "lockdown".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_lockdown", player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "instance lockdown");
+        }
+        player.sendMessage("Usage: /mcmm instance <list|create|stop|remove|lockdown> ...");
         return true;
     }
 
@@ -231,10 +260,15 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             try {
                 BackendClient.BackendResponse response = backend.postWorldAction(action);
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    player.sendMessage("[MCMM] status=" + response.statusCode());
-                    if (response.body() != null && !response.body().trim().isEmpty()) {
-                        player.sendMessage("[MCMM] " + response.body());
+                    String msg = extractBackendMessage(response.body());
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        player.sendMessage("[MCMM] " + (msg.isEmpty() ? "ok" : msg));
+                        return;
                     }
+                    if (msg.isEmpty()) {
+                        msg = response.body();
+                    }
+                    player.sendMessage("[MCMM] failed(" + response.statusCode() + "): " + msg);
                 });
             } catch (IOException e) {
                 plugin.getLogger().warning("backend request failed: " + e.getMessage());
@@ -259,6 +293,27 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         return sb.toString();
     }
 
+    private static String extractBackendMessage(String body) {
+        if (body == null) {
+            return "";
+        }
+        String trimmed = body.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        Matcher m = MESSAGE_PATTERN.matcher(trimmed);
+        if (!m.find()) {
+            return trimmed;
+        }
+        String msg = m.group(1);
+        return msg
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("\\n", " ")
+                .replace("\\r", " ")
+                .trim();
+    }
+
     private static void sendUsage(CommandSender sender) {
         sender.sendMessage("=== MCMM Commands ===");
         sender.sendMessage("Usage: /mcmm req create <world_alias> [template_id|template_name]");
@@ -275,6 +330,10 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         sender.sendMessage("Usage: /mcmm world <world_alias> remove user <user>");
         sender.sendMessage("Usage: /mcmm template list");
         sender.sendMessage("Usage: /mcmm instance list");
+        sender.sendMessage("Usage: /mcmm instance create <world_alias> [template_id|template_name]");
+        sender.sendMessage("Usage: /mcmm instance stop <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm instance remove <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm instance lockdown <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm confirm");
         sender.sendMessage("Usage: /mcmm help");
     }
@@ -301,7 +360,10 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             return prefixMatch(Collections.singletonList("list"), args[1]);
         }
         if ("instance".equalsIgnoreCase(args[0]) && args.length == 2 && adminView) {
-            return prefixMatch(Collections.singletonList("list"), args[1]);
+            return prefixMatch(Arrays.asList("list", "create", "stop", "remove", "lockdown"), args[1]);
+        }
+        if ("instance".equalsIgnoreCase(args[0]) && args.length == 4 && "create".equalsIgnoreCase(args[1]) && adminView) {
+            return prefixMatch(Collections.singletonList("<template_id|template_name>"), args[3]);
         }
         if ("world".equalsIgnoreCase(args[0]) && args.length == 2) {
             return prefixMatch(Arrays.asList("list", "info", "set", "remove", "<world_alias>"), args[1]);

@@ -1,6 +1,9 @@
 http_addr: ":8080"
 database_url: "postgres://mcmm:mcmm@db:5432/mcmmdb?sslmode=disable"
 lobby_servertap_url: "http://mcmm-lobby:4567"
+proxy_bridge_url: "http://velocity:19132"
+proxy_auth_header: "Authorization"
+proxy_auth_token: "replace-with-real-token"
 servertap_key: ""
 servertap_auth_header: "key"
 mini_servertap_port: 4567
