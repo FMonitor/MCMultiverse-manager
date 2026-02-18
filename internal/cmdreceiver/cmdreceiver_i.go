@@ -200,12 +200,20 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 		return s.handleWorldJoin(ctx, req, actor)
 	case "world_set_access":
 		return s.handleWorldSetAccess(ctx, req, actor)
+	case "lobby_join":
+		return s.handleLobbyJoin(ctx, actor)
 	case "world_remove", "delete":
 		return s.handleDelete(ctx, req, actor)
 	case "member_add":
 		return s.handleMemberAdd(ctx, req, actor)
 	case "member_remove":
 		return s.handleMemberRemove(ctx, req, actor)
+	case "player_invite":
+		return s.handleMemberAdd(ctx, req, actor)
+	case "player_reject":
+		return s.handleMemberRemove(ctx, req, actor)
+	case "player_list":
+		return s.handlePlayerList(ctx)
 	case "instance_list":
 		return s.handleInstanceList(ctx, actor)
 	case "instance_create":
@@ -259,12 +267,14 @@ func (s *ServiceI) handleRequestCreate(ctx context.Context, req WorldCommandRequ
 		templateID sql.NullInt64
 		err        error
 	)
+	templateLabel := "empty"
 	if req.TemplateName != "" {
 		template, err = s.resolveTemplate(ctx, req.TemplateName)
 		if err != nil {
 			return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "template not found"}
 		}
 		templateID = sql.NullInt64{Int64: template.ID, Valid: true}
+		templateLabel = fmt.Sprintf("#%d %s", template.ID, template.Tag)
 	}
 
 	ur, err := s.repos.UserRequest.ReadByRequestID(ctx, req.RequestID)
@@ -297,7 +307,7 @@ func (s *ServiceI) handleRequestCreate(ctx context.Context, req WorldCommandRequ
 			"request created: #%d world=%s template=%s",
 			requestNo,
 			finalAlias,
-			displayTemplate(req.TemplateName),
+			templateLabel,
 		),
 	}
 }
@@ -659,8 +669,13 @@ func (s *ServiceI) handleWorldList(ctx context.Context, actor pgsql.User) (int, 
 	}
 	picked := make(map[int64]worldView)
 	for _, inst := range all {
+		if inst.Status != string(worker.StatusOn) && inst.Status != string(worker.StatusOff) {
+			continue
+		}
 		role := ""
 		switch {
+		case isAdmin(actor):
+			role = "admin"
 		case inst.OwnerID == actor.ID:
 			role = "owner"
 		case memberSet[inst.ID] != "":
@@ -690,7 +705,7 @@ func (s *ServiceI) handleWorldList(ctx context.Context, actor pgsql.User) (int, 
 
 	items := make([]string, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, fmt.Sprintf("%d:%s:%s(%s)", r.id, r.alias, r.status, r.role))
+		items = append(items, fmt.Sprintf("#%d:%s:%s(%s)", r.id, r.alias, r.status, r.role))
 	}
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: strings.Join(items, ", ")}
 }
@@ -758,6 +773,13 @@ func (s *ServiceI) handleWorldJoin(ctx context.Context, req WorldCommandRequest,
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "send player failed"}
 	}
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("joining #%d:%s", inst.ID, inst.Alias)}
+}
+
+func (s *ServiceI) handleLobbyJoin(ctx context.Context, actor pgsql.User) (int, WorldCommandResponse) {
+	if err := s.sendPlayerToServer(ctx, actor.MCName, "lobby"); err != nil {
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "send player to lobby failed"}
+	}
+	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "returning to lobby"}
 }
 
 func (s *ServiceI) handleInstanceList(ctx context.Context, actor pgsql.User) (int, WorldCommandResponse) {
@@ -834,11 +856,12 @@ func (s *ServiceI) handleInstanceCreate(ctx context.Context, req WorldCommandReq
 	return http.StatusAccepted, WorldCommandResponse{
 		Status: "accepted",
 		Message: fmt.Sprintf(
-			"instance creating: id=%d world=%s template=%s. join with: /mcmm world %d",
+			"instance creating: id=%d world=%s template=%s. join with: /mcmm world #%d:%s",
 			instanceID,
 			finalAlias,
 			displayTemplate(template.Tag),
 			instanceID,
+			finalAlias,
 		),
 	}
 }
@@ -877,6 +900,28 @@ func (s *ServiceI) handleInstanceLockdown(ctx context.Context, req WorldCommandR
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
 	}
 	return http.StatusNotImplemented, WorldCommandResponse{Status: "error", Message: "instance lockdown not implemented yet"}
+}
+
+func (s *ServiceI) handlePlayerList(ctx context.Context) (int, WorldCommandResponse) {
+	users, err := s.repos.User.List(ctx)
+	if err != nil {
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "list players failed"}
+	}
+	if len(users) == 0 {
+		return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "no players"}
+	}
+	limit := len(users)
+	if limit > 200 {
+		limit = 200
+	}
+	names := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		if strings.TrimSpace(users[i].MCName) == "" {
+			continue
+		}
+		names = append(names, users[i].MCName)
+	}
+	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "players: " + strings.Join(names, ", ")}
 }
 
 func (s *ServiceI) ensureActor(ctx context.Context, actorUUID, actorName string) (pgsql.User, error) {
@@ -983,6 +1028,9 @@ func (s *ServiceI) resolveInstance(ctx context.Context, ident string) (pgsql.Map
 
 func parseInstanceID(alias string) (int64, error) {
 	s := strings.TrimSpace(alias)
+	if id, ok := parseSharpNumericID(s); ok {
+		return id, nil
+	}
 	s = strings.TrimPrefix(s, "inst-")
 	return strconv.ParseInt(s, 10, 64)
 }
@@ -991,6 +1039,9 @@ func (s *ServiceI) resolveUserRequest(ctx context.Context, ident string) (pgsql.
 	ident = strings.TrimSpace(ident)
 	if ident == "" {
 		return pgsql.UserRequest{}, sql.ErrNoRows
+	}
+	if id, ok := parseSharpNumericID(ident); ok {
+		return s.repos.UserRequest.Read(ctx, id)
 	}
 	if id, err := strconv.ParseInt(ident, 10, 64); err == nil {
 		return s.repos.UserRequest.Read(ctx, id)
@@ -1003,10 +1054,33 @@ func (s *ServiceI) resolveTemplate(ctx context.Context, ident string) (pgsql.Map
 	if ident == "" {
 		return pgsql.MapTemplate{}, sql.ErrNoRows
 	}
+	if id, ok := parseSharpNumericID(ident); ok {
+		return s.repos.MapTemplate.Read(ctx, id)
+	}
 	if id, err := strconv.ParseInt(ident, 10, 64); err == nil {
 		return s.repos.MapTemplate.Read(ctx, id)
 	}
 	return s.repos.MapTemplate.ReadByTag(ctx, ident)
+}
+
+func parseSharpNumericID(raw string) (int64, bool) {
+	s := strings.TrimSpace(raw)
+	if !strings.HasPrefix(s, "#") {
+		return 0, false
+	}
+	s = strings.TrimPrefix(s, "#")
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(s[:i], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 func buildOwnedAlias(ownerName string, rawAlias string) string {
@@ -1088,12 +1162,13 @@ func (s *ServiceI) notifyApproveResult(
 	msg := ""
 	if success {
 		msg = fmt.Sprintf(
-			"[MCMM] req#%d approved. world=%s template=%s instance=%d. Use /mcmm world %d to join",
+			"[MCMM] req#%d approved. world=%s template=%s instance=%d. Use /mcmm world #%d:%s to join",
 			ur.ID,
 			worldAlias,
 			displayTemplate(templateName),
 			instanceID,
 			instanceID,
+			worldAlias,
 		)
 	} else {
 		msg = fmt.Sprintf("[MCMM] req#%d failed: %s", ur.ID, reason)
@@ -1123,15 +1198,12 @@ func (s *ServiceI) notifyPlayersViaLobbyTap(ctx context.Context, conn *servertap
 }
 
 func (s *ServiceI) sendPlayerToInstance(ctx context.Context, playerName string, instanceID int64) error {
+	serverID := fmt.Sprintf("mcmm-inst-%d", instanceID)
 	if s.proxyBridgeURL != "" {
-		serverID := fmt.Sprintf("mcmm-inst-%d", instanceID)
 		if err := s.proxyRegister(ctx, serverID, serverID, 25565); err != nil {
 			return fmt.Errorf("proxy register failed: %w", err)
 		}
-		if err := s.proxySend(ctx, playerName, serverID); err != nil {
-			return fmt.Errorf("proxy send failed: %w", err)
-		}
-		return nil
+		return s.sendPlayerToServer(ctx, playerName, serverID)
 	}
 
 	if s.lobbyTapURL == "" {
@@ -1141,10 +1213,19 @@ func (s *ServiceI) sendPlayerToInstance(ctx context.Context, playerName string, 
 	if err != nil {
 		return err
 	}
-	serverName := fmt.Sprintf("mcmm-inst-%d", instanceID)
-	cmd := servertap.NewCommandBuilder("send").Arg(playerName).Arg(serverName).Build()
+	cmd := servertap.NewCommandBuilder("send").Arg(playerName).Arg(serverID).Build()
 	_, err = conn.Execute(ctx, servertap.ExecuteRequest{Command: cmd})
 	return err
+}
+
+func (s *ServiceI) sendPlayerToServer(ctx context.Context, playerName, serverID string) error {
+	if s.proxyBridgeURL == "" {
+		return fmt.Errorf("proxy bridge not configured")
+	}
+	if err := s.proxySend(ctx, playerName, serverID); err != nil {
+		return fmt.Errorf("proxy send failed: %w", err)
+	}
+	return nil
 }
 
 func (s *ServiceI) proxyRegister(ctx context.Context, serverID, host string, port int) error {

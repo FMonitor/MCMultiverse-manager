@@ -22,17 +22,25 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class WorldCommandExecutor implements CommandExecutor, TabCompleter {
-    private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("req", "world", "template", "instance", "confirm", "help");
+    private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList("req", "world", "player", "template", "instance", "lobby", "confirm", "help");
     private static final long DELETE_CONFIRM_TTL_SECONDS = 30;
     private static final long WORLD_CACHE_TTL_SECONDS = 20;
+    private static final long TEMPLATE_CACHE_TTL_SECONDS = 60;
+    private static final long REQUEST_CACHE_TTL_SECONDS = 15;
+    private static final long PLAYER_CACHE_TTL_SECONDS = 10;
     private static final Pattern MESSAGE_PATTERN = Pattern.compile("\"message\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
-    private static final Pattern WORLD_ITEM_PATTERN = Pattern.compile("^(\\d+):([^:]+):([^\\(]+)\\(([^\\)]+)\\)$");
+    private static final Pattern WORLD_ITEM_PATTERN = Pattern.compile("^#(\\d+):([^:]+):([^\\(]+)\\(([^\\)]+)\\)$");
+    private static final Pattern TEMPLATE_ITEM_PATTERN = Pattern.compile("^#(\\d+):([^\\(]+)\\(.*\\)$");
+    private static final Pattern REQUEST_ITEM_PATTERN = Pattern.compile("^#(\\d+):([^\\s]+)\\s+player=.*\\sworld=([^\\s,]+).*$");
 
     private final JavaPlugin plugin;
     private final BackendClient backend;
     private final boolean dryRun;
     private final Map<UUID, PendingDelete> pendingDeletes = new ConcurrentHashMap<>();
     private final Map<UUID, CachedWorlds> worldCache = new ConcurrentHashMap<>();
+    private final Map<UUID, CachedItems> templateCache = new ConcurrentHashMap<>();
+    private final Map<UUID, CachedItems> requestCache = new ConcurrentHashMap<>();
+    private final Map<UUID, CachedItems> playerCache = new ConcurrentHashMap<>();
 
     public WorldCommandExecutor(JavaPlugin plugin, BackendClient backend, boolean dryRun) {
         this.plugin = plugin;
@@ -60,12 +68,16 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
                 return true;
             case "confirm":
                 return handleConfirm(player);
+            case "lobby":
+                return handleLobby(player, args);
             case "req":
                 return handleReq(player, args);
             case "template":
                 return handleTemplate(player, args);
             case "world":
                 return handleWorld(player, args);
+            case "player":
+                return handlePlayer(player, args);
             case "instance":
                 return handleInstance(player, args);
             default:
@@ -235,6 +247,24 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         return true;
     }
 
+    private boolean handlePlayer(Player player, String[] args) {
+        if (args.length != 4) {
+            player.sendMessage("Usage: /mcmm player <invite|reject> <player_name> <world_id|alias>");
+            return true;
+        }
+        String sub = args[1].toLowerCase(Locale.ROOT);
+        if (!"invite".equals(sub) && !"reject".equals(sub)) {
+            player.sendMessage("Usage: /mcmm player <invite|reject> <player_name> <world_id|alias>");
+            return true;
+        }
+        String action = "invite".equals(sub) ? "player_invite" : "player_reject";
+        return dispatch(player,
+                new BackendClient.WorldAction(action, player.getUniqueId().toString(), player.getName())
+                        .targetName(args[2])
+                        .worldAlias(args[3]),
+                "player " + sub);
+    }
+
     private boolean handleConfirm(Player player) {
         PendingDelete pending = pendingDeletes.get(player.getUniqueId());
         if (pending == null) {
@@ -251,6 +281,16 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
                 new BackendClient.WorldAction("world_remove", player.getUniqueId().toString(), player.getName())
                         .worldAlias(pending.worldAlias),
                 "world remove");
+    }
+
+    private boolean handleLobby(Player player, String[] args) {
+        if (args.length != 1) {
+            player.sendMessage("Usage: /mcmm lobby");
+            return true;
+        }
+        return dispatch(player,
+                new BackendClient.WorldAction("lobby_join", player.getUniqueId().toString(), player.getName()),
+                "lobby join");
     }
 
     private boolean dispatch(Player player, BackendClient.WorldAction action, String summary) {
@@ -334,12 +374,15 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         sender.sendMessage("Usage: /mcmm world info [instance_id|alias]");
         sender.sendMessage("Usage: /mcmm world <world_alias> add user <user>");
         sender.sendMessage("Usage: /mcmm world <world_alias> remove user <user>");
+        sender.sendMessage("Usage: /mcmm player invite <player_name> <world_id|alias>");
+        sender.sendMessage("Usage: /mcmm player reject <player_name> <world_id|alias>");
         sender.sendMessage("Usage: /mcmm template list");
         sender.sendMessage("Usage: /mcmm instance list");
         sender.sendMessage("Usage: /mcmm instance create <world_alias> [template_id|template_name]");
         sender.sendMessage("Usage: /mcmm instance stop <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm instance remove <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm instance lockdown <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm lobby");
         sender.sendMessage("Usage: /mcmm confirm");
         sender.sendMessage("Usage: /mcmm help");
     }
@@ -348,19 +391,57 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         boolean adminView = hasAdminView(sender);
         if (args.length == 1) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                String rootPrefix = args[0] == null ? "" : args[0].toLowerCase(Locale.ROOT);
+                if ("world".startsWith(rootPrefix)) {
+                    maybeRefreshWorldCache(p);
+                }
+            }
             if (adminView) {
                 return prefixMatch(ROOT_SUBCOMMANDS, args[0]);
             }
-            return prefixMatch(Arrays.asList("req", "world", "template", "confirm", "help"), args[0]);
+            return prefixMatch(Arrays.asList("req", "world", "player", "template", "lobby", "confirm", "help"), args[0]);
         }
         if ("req".equalsIgnoreCase(args[0]) && args.length == 2) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                String subPrefix = args[1] == null ? "" : args[1].toLowerCase(Locale.ROOT);
+                if ("create".startsWith(subPrefix)) {
+                    maybeRefreshWorldCache(p);
+                    maybeRefreshTemplateCache(p);
+                }
+                if ("approve".startsWith(subPrefix) || "reject".startsWith(subPrefix) || "cancel".startsWith(subPrefix)) {
+                    maybeRefreshRequestCache(p);
+                }
+            }
             if (adminView) {
                 return prefixMatch(Arrays.asList("create", "list", "approve", "reject", "cancel"), args[1]);
             }
             return prefixMatch(Arrays.asList("create", "list", "cancel"), args[1]);
         }
+        if ("req".equalsIgnoreCase(args[0]) && args.length == 3 && "create".equalsIgnoreCase(args[1])) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                maybeRefreshWorldCache(p);
+                return prefixMatch(getWorldAliasHints(p.getUniqueId()), args[2]);
+            }
+            return prefixMatch(Collections.singletonList("<world_alias>"), args[2]);
+        }
         if ("req".equalsIgnoreCase(args[0]) && args.length == 4 && "create".equalsIgnoreCase(args[1])) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                maybeRefreshTemplateCache(p);
+                return prefixMatch(getTemplateHints(p.getUniqueId()), args[3]);
+            }
             return prefixMatch(Collections.singletonList("<template_id|template_name>"), args[3]);
+        }
+        if ("req".equalsIgnoreCase(args[0]) && args.length == 3 &&
+                ("approve".equalsIgnoreCase(args[1]) || "reject".equalsIgnoreCase(args[1]) || "cancel".equalsIgnoreCase(args[1])) &&
+                sender instanceof Player) {
+            Player p = (Player) sender;
+            maybeRefreshRequestCache(p);
+            return prefixMatch(getRequestHints(p.getUniqueId()), args[2]);
         }
         if ("template".equalsIgnoreCase(args[0]) && args.length == 2) {
             return prefixMatch(Collections.singletonList("list"), args[1]);
@@ -398,6 +479,23 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
                 ("add".equalsIgnoreCase(args[2]) || "remove".equalsIgnoreCase(args[2]))) {
             return prefixMatch(Collections.singletonList("user"), args[3]);
         }
+        if ("player".equalsIgnoreCase(args[0]) && args.length == 2) {
+            return prefixMatch(Arrays.asList("invite", "reject"), args[1]);
+        }
+        if ("player".equalsIgnoreCase(args[0]) && args.length == 3 &&
+                ("invite".equalsIgnoreCase(args[1]) || "reject".equalsIgnoreCase(args[1])) &&
+                sender instanceof Player) {
+            Player p = (Player) sender;
+            maybeRefreshPlayerCache(p);
+            return prefixMatch(getPlayerHints(p.getUniqueId()), args[2]);
+        }
+        if ("player".equalsIgnoreCase(args[0]) && args.length == 4 &&
+                ("invite".equalsIgnoreCase(args[1]) || "reject".equalsIgnoreCase(args[1])) &&
+                sender instanceof Player) {
+            Player p = (Player) sender;
+            maybeRefreshWorldCache(p);
+            return prefixMatch(getWorldHints(p.getUniqueId()), args[3]);
+        }
         return Collections.emptyList();
     }
 
@@ -409,12 +507,12 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
     private static List<String> prefixMatch(List<String> candidates, String rawPrefix) {
         String prefix = rawPrefix == null ? "" : rawPrefix.toLowerCase(Locale.ROOT);
         List<String> out = new ArrayList<>();
-        for (String c : candidates) {
+        for (String c : dedupe(candidates)) {
             if (c.toLowerCase(Locale.ROOT).startsWith(prefix)) {
                 out.add(c);
             }
         }
-        return out;
+        return dedupe(out);
     }
 
     private void maybeRefreshWorldCache(Player player) {
@@ -453,6 +551,115 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         return cached.hints;
     }
 
+    private List<String> getWorldAliasHints(UUID playerId) {
+        List<String> all = getWorldHints(playerId);
+        List<String> out = new ArrayList<>();
+        for (String item : all) {
+            if (item == null || item.trim().isEmpty()) {
+                continue;
+            }
+            if (item.matches("^\\d+$") || item.startsWith("#")) {
+                continue;
+            }
+            out.add(item);
+        }
+        return dedupe(out);
+    }
+
+    private void maybeRefreshTemplateCache(Player player) {
+        CachedItems cached = templateCache.get(player.getUniqueId());
+        if (cached != null && Instant.now().isBefore(cached.expiresAt)) {
+            return;
+        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                BackendClient.BackendResponse response = backend.postWorldAction(
+                        new BackendClient.WorldAction("template_list", player.getUniqueId().toString(), player.getName())
+                );
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    String msg = extractBackendMessage(response.body());
+                    List<String> items = parseTemplateHints(msg);
+                    templateCache.put(player.getUniqueId(), new CachedItems(items, Instant.now().plusSeconds(TEMPLATE_CACHE_TTL_SECONDS)));
+                }
+            } catch (IOException e) {
+                plugin.getLogger().fine("template cache refresh failed: " + e.getMessage());
+            }
+        });
+    }
+
+    private List<String> getTemplateHints(UUID playerId) {
+        CachedItems cached = templateCache.get(playerId);
+        if (cached == null || Instant.now().isAfter(cached.expiresAt)) {
+            return Collections.emptyList();
+        }
+        return cached.items;
+    }
+
+    private void maybeRefreshRequestCache(Player player) {
+        CachedItems cached = requestCache.get(player.getUniqueId());
+        if (cached != null && Instant.now().isBefore(cached.expiresAt)) {
+            return;
+        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                BackendClient.BackendResponse response = backend.postWorldAction(
+                        new BackendClient.WorldAction("request_list", player.getUniqueId().toString(), player.getName())
+                );
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    String msg = extractBackendMessage(response.body());
+                    List<String> items = parseRequestHints(msg);
+                    requestCache.put(player.getUniqueId(), new CachedItems(items, Instant.now().plusSeconds(REQUEST_CACHE_TTL_SECONDS)));
+                }
+            } catch (IOException e) {
+                plugin.getLogger().fine("request cache refresh failed: " + e.getMessage());
+            }
+        });
+    }
+
+    private List<String> getRequestHints(UUID playerId) {
+        CachedItems cached = requestCache.get(playerId);
+        if (cached == null || Instant.now().isAfter(cached.expiresAt)) {
+            return Collections.emptyList();
+        }
+        return cached.items;
+    }
+
+    private void maybeRefreshPlayerCache(Player player) {
+        CachedItems cached = playerCache.get(player.getUniqueId());
+        if (cached != null && Instant.now().isBefore(cached.expiresAt)) {
+            return;
+        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<String> names = new ArrayList<>();
+            try {
+                BackendClient.BackendResponse response = backend.postWorldAction(
+                        new BackendClient.WorldAction("player_list", player.getUniqueId().toString(), player.getName())
+                );
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    String msg = extractBackendMessage(response.body());
+                    names.addAll(parsePlayerHints(msg));
+                }
+            } catch (IOException e) {
+                plugin.getLogger().fine("player cache refresh failed: " + e.getMessage());
+            }
+            // fallback: online players
+            if (names.isEmpty()) {
+                for (Player online : Bukkit.getOnlinePlayers()) {
+                    names.add(online.getName());
+                }
+            }
+            playerCache.put(player.getUniqueId(), new CachedItems(dedupe(names), Instant.now().plusSeconds(PLAYER_CACHE_TTL_SECONDS)));
+        });
+    }
+
+    private List<String> getPlayerHints(UUID playerId) {
+        CachedItems cached = playerCache.get(playerId);
+        if (cached == null || Instant.now().isAfter(cached.expiresAt)) {
+            return Collections.emptyList();
+        }
+        return cached.items;
+    }
+
     private static List<String> parseWorldHints(String message) {
         if (message == null || message.trim().isEmpty() || "no worlds".equalsIgnoreCase(message.trim())) {
             return Collections.emptyList();
@@ -466,8 +673,74 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             }
             String id = m.group(1);
             String alias = m.group(2);
-            out.add(id);
+            out.add("#" + id + ":" + alias);
             out.add(alias);
+        }
+        return dedupe(out);
+    }
+
+    private static List<String> parseTemplateHints(String message) {
+        if (message == null || message.trim().isEmpty() || "no templates found".equalsIgnoreCase(message.trim())) {
+            return Collections.emptyList();
+        }
+        String raw = message.trim();
+        if (raw.toLowerCase(Locale.ROOT).startsWith("templates:")) {
+            raw = raw.substring("templates:".length()).trim();
+        }
+        String[] items = raw.split(",\\s*");
+        List<String> out = new ArrayList<>();
+        for (String item : items) {
+            String trimmed = item.trim();
+            Matcher m = TEMPLATE_ITEM_PATTERN.matcher(trimmed);
+            if (!m.matches()) {
+                continue;
+            }
+            String id = m.group(1);
+            String tag = m.group(2).trim();
+            out.add("#" + id + ":" + tag);
+        }
+        return dedupe(out);
+    }
+
+    private static List<String> parseRequestHints(String message) {
+        if (message == null || message.trim().isEmpty() || "no requests".equalsIgnoreCase(message.trim())) {
+            return Collections.emptyList();
+        }
+        String[] items = message.split(",\\s*");
+        List<String> out = new ArrayList<>();
+        for (String item : items) {
+            Matcher m = REQUEST_ITEM_PATTERN.matcher(item.trim());
+            if (!m.matches()) {
+                continue;
+            }
+            String id = m.group(1);
+            String world = m.group(3);
+            out.add("#" + id);
+            if (world != null && !world.trim().isEmpty() && !"-".equals(world.trim())) {
+                out.add("#" + id + ":" + world.trim());
+            }
+        }
+        return dedupe(out);
+    }
+
+    private static List<String> parsePlayerHints(String message) {
+        if (message == null || message.trim().isEmpty() || "no players".equalsIgnoreCase(message.trim())) {
+            return Collections.emptyList();
+        }
+        String raw = message.trim();
+        if (raw.toLowerCase(Locale.ROOT).startsWith("players:")) {
+            raw = raw.substring("players:".length()).trim();
+        }
+        if (raw.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String[] items = raw.split(",\\s*");
+        List<String> out = new ArrayList<>();
+        for (String i : items) {
+            String name = i.trim();
+            if (!name.isEmpty()) {
+                out.add(name);
+            }
         }
         return dedupe(out);
     }
@@ -499,6 +772,16 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
 
         private CachedWorlds(List<String> hints, Instant expiresAt) {
             this.hints = hints;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    private static final class CachedItems {
+        private final List<String> items;
+        private final Instant expiresAt;
+
+        private CachedItems(List<String> items, Instant expiresAt) {
+            this.items = items;
             this.expiresAt = expiresAt;
         }
     }

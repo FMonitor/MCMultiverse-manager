@@ -29,6 +29,8 @@
 | `/mcmm world remove <instance_id\|alias>` | owner/OP | 删除（归档）世界，需二次确认。 |
 | `/mcmm world <world_alias> add user <user>` | owner/OP | 添加成员。 |
 | `/mcmm world <world_alias> remove user <user>` | owner/OP | 移除成员。 |
+| `/mcmm player invite <player_name> <instance_id\|alias>` | owner/OP | 邀请玩家（写入 `instance_members`，支持离线玩家；需玩家已存在于数据库）。 |
+| `/mcmm player reject <player_name> <instance_id\|alias>` | owner/OP | 取消邀请（从 `instance_members` 删除）。 |
 
 二次确认：
 - 第一步：`/mcmm world remove <id_or_alias>`
@@ -62,6 +64,8 @@
 | `world_remove` | `world remove` |
 | `member_add` | `world <alias> add user` |
 | `member_remove` | `world <alias> remove user` |
+| `player_invite` | `player invite` |
+| `player_reject` | `player reject` |
 | `template_list` | `template list` |
 | `instance_list` | `instance list` |
 | `instance_create` | `instance create` |

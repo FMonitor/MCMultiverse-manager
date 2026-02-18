@@ -13,6 +13,7 @@ type UserRepo interface {
 	Read(ctx context.Context, id int64) (User, error)
 	ReadByUUID(ctx context.Context, mcUUID string) (User, error)
 	ReadByName(ctx context.Context, mcName string) (User, error)
+	List(ctx context.Context) ([]User, error)
 	ListByRole(ctx context.Context, role string) ([]User, error)
 	Update(ctx context.Context, user User) error
 	Delete(ctx context.Context, id int64) error

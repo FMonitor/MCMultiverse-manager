@@ -53,3 +53,6 @@ MultiMap*/
 archived/
 
 restart_all.sh
+
+logs/
+*.log
