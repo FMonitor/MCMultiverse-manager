@@ -43,3 +43,4 @@ Auth: header `Authorization: Bearer <token>` (or raw token value).
 - `POST /v1/proxy/send`
   - form: `player`, `server_id`
 - `GET /v1/proxy/servers`
+- `GET /v1/proxy/players?server_id=<id>`

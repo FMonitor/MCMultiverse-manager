@@ -1,0 +1,21 @@
+services:
+  mcmm-inst-6:
+    image: mcmm-mini:java21-jlink
+    container_name: mcmm-inst-6
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms1G -Xmx2G"
+      PAPER_JAR: "paper-1.21.1-133.jar"
+    volumes:
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/paper-1.21.1-133.jar:/data/server/paper-1.21.1-133.jar:ro
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/cache:/data/server/cache
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/versions:/data/server/versions
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/world:/data/server/world
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/world_nether:/data/server/world_nether
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/world_the_end:/data/server/world_the_end
+      - /home/monitor/MCMultiverse-manager/deploy/instance/6/whitelist.json:/data/server/whitelist.json
+    networks:
+      - mcmultiverse-manager_mcmm-network
+networks:
+  mcmultiverse-manager_mcmm-network:
+    external: true

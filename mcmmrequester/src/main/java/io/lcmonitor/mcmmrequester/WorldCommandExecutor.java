@@ -64,7 +64,15 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         String root = args[0].toLowerCase(Locale.ROOT);
         switch (root) {
             case "help":
-                sendUsage(sender);
+                int page = 1;
+                if (args.length >= 2) {
+                    try {
+                        page = Integer.parseInt(args[1]);
+                    } catch (NumberFormatException ignored) {
+                        page = 1;
+                    }
+                }
+                sendUsage(sender, page);
                 return true;
             case "confirm":
                 return handleConfirm(player);
@@ -81,7 +89,7 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             case "instance":
                 return handleInstance(player, args);
             default:
-                sendUsage(sender);
+                sendUsage(sender, 1);
                 return true;
         }
     }
@@ -390,35 +398,57 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
     }
 
     private static void sendUsage(CommandSender sender) {
-        sender.sendMessage("=== MCMM Commands ===");
-        sender.sendMessage("Usage: /mcmm req create <world_alias> [template_id|template_name]");
-        sender.sendMessage("Usage: /mcmm req list");
-        sender.sendMessage("Usage: /mcmm req approve <request_no|request_id>");
-        sender.sendMessage("Usage: /mcmm req reject <request_no|request_id> [reason]");
-        sender.sendMessage("Usage: /mcmm req cancel <request_no|request_id> [reason]");
-        sender.sendMessage("Usage: /mcmm world remove <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm world <instance_id|alias>    # join world");
-        sender.sendMessage("Usage: /mcmm world list");
-        sender.sendMessage("Usage: /mcmm world on <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm world off <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm world set <public|privacy>");
-        sender.sendMessage("Usage: /mcmm world info [instance_id|alias]");
-        sender.sendMessage("Usage: /mcmm world <world_alias> add user <user>");
-        sender.sendMessage("Usage: /mcmm world <world_alias> remove user <user>");
-        sender.sendMessage("Usage: /mcmm player invite <player_name> <world_id|alias>");
-        sender.sendMessage("Usage: /mcmm player reject <player_name> <world_id|alias>");
-        sender.sendMessage("Usage: /mcmm template list");
-        sender.sendMessage("Usage: /mcmm instance list");
-        sender.sendMessage("Usage: /mcmm instance create <world_alias> [template_id|template_name]");
-        sender.sendMessage("Usage: /mcmm instance on <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm instance off <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm instance stop <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm instance remove <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm instance lockdown <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm instance unlock <instance_id|alias>");
-        sender.sendMessage("Usage: /mcmm lobby");
-        sender.sendMessage("Usage: /mcmm confirm");
-        sender.sendMessage("Usage: /mcmm help");
+        sendUsage(sender, 1);
+    }
+
+    private static void sendUsage(CommandSender sender, int page) {
+        final int total = 4;
+        if (page < 1 || page > total) {
+            page = 1;
+        }
+        sender.sendMessage("=== MCMM 帮助 " + page + "/" + total + " ===");
+        if (page == 1) {
+            sender.sendMessage("/mcmm help [页码]  查看帮助");
+            sender.sendMessage("/mcmm req create <世界名> [模板]  申请创建");
+            sender.sendMessage("/mcmm req list  查看请求");
+            sender.sendMessage("/mcmm req approve <#请求号>  管理员通过");
+            sender.sendMessage("/mcmm req reject <#请求号> [原因]  管理员拒绝");
+            sender.sendMessage("/mcmm req cancel <#请求号> [原因]  取消请求");
+            sender.sendMessage("/mcmm template list  查看模板");
+            sender.sendMessage("/mcmm lobby  返回大厅");
+            sender.sendMessage("下一页: /mcmm help 2");
+            return;
+        }
+        if (page == 2) {
+            sender.sendMessage("/mcmm world list  查看可加入世界");
+            sender.sendMessage("/mcmm world <#id:alias|alias>  进入世界");
+            sender.sendMessage("/mcmm world info [世界]  查看信息");
+            sender.sendMessage("/mcmm world set <public|privacy>  设置公开性");
+            sender.sendMessage("/mcmm world on <世界>  启动自己的世界");
+            sender.sendMessage("/mcmm world off <世界>  关闭自己的世界");
+            sender.sendMessage("/mcmm world remove <世界>  删除/归档(需confirm)");
+            sender.sendMessage("/mcmm confirm  确认删除");
+            sender.sendMessage("下一页: /mcmm help 3");
+            return;
+        }
+        if (page == 3) {
+            sender.sendMessage("/mcmm player invite <玩家> <世界>  邀请成员");
+            sender.sendMessage("/mcmm player reject <玩家> <世界>  移除成员");
+            sender.sendMessage("/mcmm world <世界> add user <玩家>  兼容旧写法");
+            sender.sendMessage("/mcmm world <世界> remove user <玩家>  兼容旧写法");
+            sender.sendMessage("提示: 离线玩家也可邀请(需已入库)");
+            sender.sendMessage("下一页: /mcmm help 4");
+            return;
+        }
+        sender.sendMessage("/mcmm instance list  管理员查看全部实例");
+        sender.sendMessage("/mcmm instance create <世界名> [模板]  管理员直建");
+        sender.sendMessage("/mcmm instance on <实例>  管理员启动");
+        sender.sendMessage("/mcmm instance off <实例>  管理员关闭");
+        sender.sendMessage("/mcmm instance remove <实例>  管理员归档");
+        sender.sendMessage("/mcmm instance lockdown <实例>  锁定仅OP可进");
+        sender.sendMessage("/mcmm instance unlock <实例>  解除锁定");
+        sender.sendMessage("/mcmm instance stop <实例>  等同off");
+        sender.sendMessage("回到第一页: /mcmm help 1");
     }
 
     @Override
@@ -481,6 +511,18 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             return prefixMatch(Collections.singletonList("list"), args[1]);
         }
         if ("instance".equalsIgnoreCase(args[0]) && args.length == 2 && adminView) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                String subPrefix = args[1] == null ? "" : args[1].toLowerCase(Locale.ROOT);
+                if ("create".startsWith(subPrefix)) {
+                    maybeRefreshTemplateCache(p);
+                }
+                if ("on".startsWith(subPrefix) || "off".startsWith(subPrefix) ||
+                    "stop".startsWith(subPrefix) || "remove".startsWith(subPrefix) ||
+                    "lockdown".startsWith(subPrefix) || "unlock".startsWith(subPrefix)) {
+                    maybeRefreshWorldCache(p);
+                }
+            }
             return prefixMatch(Arrays.asList("list", "create", "on", "off", "stop", "remove", "lockdown", "unlock"), args[1]);
         }
         if ("instance".equalsIgnoreCase(args[0]) && args.length == 4 && "create".equalsIgnoreCase(args[1]) && adminView) {

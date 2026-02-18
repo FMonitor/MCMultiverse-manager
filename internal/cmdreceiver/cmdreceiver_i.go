@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,6 +118,8 @@ type ServiceI struct {
 		Errorf(string, ...any)
 	}
 }
+
+var onlineListRegex = regexp.MustCompile(`(?i)players online:\s*(.+)$`)
 
 func NewServiceI(
 	repos pgsql.Repos,
@@ -763,7 +766,7 @@ func (s *ServiceI) handleWorldPower(ctx context.Context, req WorldCommandRequest
 	if !canManage(actor, inst.OwnerID) {
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "permission denied"}
 	}
-	go func(id int64, alias string) {
+	go func(id int64, alias string, ownerID int64, actorID int64) {
 		runCtx := context.Background()
 		var runErr error
 		if on {
@@ -773,8 +776,11 @@ func (s *ServiceI) handleWorldPower(ctx context.Context, req WorldCommandRequest
 		}
 		if runErr != nil {
 			s.logger.Errorf("world power failed instance=%d alias=%s on=%v err=%v", id, alias, on, runErr)
+			s.notifyInstancePowerResult(runCtx, id, alias, ownerID, actorID, "world", on, false, runErr.Error())
+			return
 		}
-	}(inst.ID, inst.Alias)
+		s.notifyInstancePowerResult(runCtx, id, alias, ownerID, actorID, "world", on, true, "")
+	}(inst.ID, inst.Alias, inst.OwnerID, actor.ID)
 	if on {
 		return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("world start requested: #%d:%s", inst.ID, inst.Alias)}
 	}
@@ -927,7 +933,7 @@ func (s *ServiceI) handleInstancePower(ctx context.Context, req WorldCommandRequ
 	if err != nil {
 		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
 	}
-	go func(id int64, alias string) {
+	go func(id int64, alias string, ownerID int64, actorID int64) {
 		runCtx := context.Background()
 		var runErr error
 		if on {
@@ -937,12 +943,58 @@ func (s *ServiceI) handleInstancePower(ctx context.Context, req WorldCommandRequ
 		}
 		if runErr != nil {
 			s.logger.Errorf("instance power failed instance=%d alias=%s on=%v err=%v", id, alias, on, runErr)
+			s.notifyInstancePowerResult(runCtx, id, alias, ownerID, actorID, "instance", on, false, runErr.Error())
+			return
 		}
-	}(inst.ID, inst.Alias)
+		s.notifyInstancePowerResult(runCtx, id, alias, ownerID, actorID, "instance", on, true, "")
+	}(inst.ID, inst.Alias, inst.OwnerID, actor.ID)
 	if on {
 		return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("instance start requested: #%d:%s", inst.ID, inst.Alias)}
 	}
 	return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("instance stop requested: #%d:%s", inst.ID, inst.Alias)}
+}
+
+func (s *ServiceI) notifyInstancePowerResult(
+	ctx context.Context,
+	instanceID int64,
+	alias string,
+	ownerID int64,
+	actorID int64,
+	scope string,
+	on bool,
+	success bool,
+	reason string,
+) {
+	if s.lobbyTapURL == "" {
+		return
+	}
+	conn, err := servertap.NewConnectorWithAuth(s.lobbyTapURL, 5*time.Second, s.serverTapAuthName, s.serverTapKey)
+	if err != nil {
+		return
+	}
+	names := make([]string, 0, 8)
+	if u, err := s.repos.User.Read(ctx, ownerID); err == nil {
+		names = append(names, u.MCName)
+	}
+	if u, err := s.repos.User.Read(ctx, actorID); err == nil {
+		names = append(names, u.MCName)
+	}
+	if admins, err := s.repos.User.ListByRole(ctx, "admin"); err == nil {
+		for _, a := range admins {
+			names = append(names, a.MCName)
+		}
+	}
+	op := "off"
+	if on {
+		op = "on"
+	}
+	msg := ""
+	if success {
+		msg = fmt.Sprintf("[MCMM] %s %s completed: #%d:%s", scope, op, instanceID, alias)
+	} else {
+		msg = fmt.Sprintf("[MCMM] %s %s failed: #%d:%s (%s)", scope, op, instanceID, alias, reason)
+	}
+	_ = s.notifyPlayersViaLobbyTap(ctx, conn, names, msg)
 }
 
 func (s *ServiceI) handleInstanceRemove(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -979,6 +1031,9 @@ func (s *ServiceI) handleInstanceLockdown(ctx context.Context, req WorldCommandR
 	if err := s.repos.MapInstance.Update(ctx, inst); err != nil {
 		s.logger.Errorf("instance lockdown update failed instance=%d alias=%s err=%v", inst.ID, inst.Alias, err)
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "instance lockdown failed"}
+	}
+	if err := s.kickNonAdminPlayers(ctx, inst.ID); err != nil {
+		s.logger.Warnf("instance lockdown kick non-admin failed instance=%d alias=%s err=%v", inst.ID, inst.Alias, err)
 	}
 	return http.StatusOK, WorldCommandResponse{
 		Status:  "accepted",
@@ -1360,6 +1415,109 @@ func (s *ServiceI) updateInstanceWhitelist(ctx context.Context, instanceID int64
 		s.logger.Warnf("whitelist update failed instance=%d add=%v player=%s err=%v", instanceID, add, playerName, err)
 	}
 	return err
+}
+
+func (s *ServiceI) kickNonAdminPlayers(ctx context.Context, instanceID int64) error {
+	serverID := fmt.Sprintf("mcmm-inst-%d", instanceID)
+	if s.proxyBridgeURL != "" {
+		players, err := s.proxyListPlayersByServer(ctx, serverID)
+		if err == nil && len(players) > 0 {
+			for _, p := range players {
+				u, err := s.repos.User.ReadByName(ctx, p)
+				if err == nil && strings.EqualFold(u.ServerRole, "admin") {
+					continue
+				}
+				if err := s.proxySend(ctx, p, "lobby"); err != nil {
+					s.logger.Warnf("lockdown move to lobby failed instance=%d player=%s err=%v", instanceID, p, err)
+				} else {
+					s.logger.Infof("instance=%d moved player=%s to lobby due to lockdown", instanceID, p)
+				}
+			}
+			return nil
+		}
+		if err != nil {
+			s.logger.Warnf("proxy list players failed instance=%d err=%v", instanceID, err)
+		}
+	}
+
+	if strings.TrimSpace(s.instanceTapPattern) == "" {
+		return nil
+	}
+	tapURL := fmt.Sprintf(s.instanceTapPattern, instanceID)
+	conn, err := servertap.NewConnectorWithAuth(tapURL, 5*time.Second, s.serverTapAuthName, s.serverTapKey)
+	if err != nil {
+		return err
+	}
+	resp, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: "list"})
+	if err != nil {
+		return err
+	}
+	players := parseOnlinePlayers(resp.RawBody)
+	for _, p := range players {
+		u, err := s.repos.User.ReadByName(ctx, p)
+		if err == nil && strings.EqualFold(u.ServerRole, "admin") {
+			continue
+		}
+		cmd := servertap.NewCommandBuilder("kick").Arg(p).RawArg("Server is in lockdown").Build()
+		if _, err := conn.Execute(ctx, servertap.ExecuteRequest{Command: cmd}); err != nil {
+			s.logger.Warnf("kick failed instance=%d player=%s err=%v", instanceID, p, err)
+		} else {
+			s.logger.Infof("instance=%d kicked player=%s due to lockdown", instanceID, p)
+		}
+	}
+	return nil
+}
+
+func (s *ServiceI) proxyListPlayersByServer(ctx context.Context, serverID string) ([]string, error) {
+	client := &http.Client{Timeout: 6 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.proxyBridgeURL+"/v1/proxy/players?server_id="+url.QueryEscape(serverID), nil)
+	if err != nil {
+		return nil, err
+	}
+	if s.proxyAuthHeader != "" && s.proxyAuthToken != "" {
+		req.Header.Set(s.proxyAuthHeader, "Bearer "+s.proxyAuthToken)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var parsed struct {
+		Status  string   `json:"status"`
+		Players []string `json:"players"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Players, nil
+}
+
+func parseOnlinePlayers(raw string) []string {
+	body := strings.TrimSpace(raw)
+	if body == "" {
+		return nil
+	}
+	m := onlineListRegex.FindStringSubmatch(body)
+	if len(m) != 2 {
+		return nil
+	}
+	seg := strings.TrimSpace(m[1])
+	if seg == "" {
+		return nil
+	}
+	parts := strings.Split(seg, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func (s *ServiceI) proxyRegister(ctx context.Context, serverID, host string, port int) error {

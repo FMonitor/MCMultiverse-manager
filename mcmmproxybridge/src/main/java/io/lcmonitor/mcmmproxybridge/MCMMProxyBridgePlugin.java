@@ -106,6 +106,7 @@ public final class MCMMProxyBridgePlugin {
         httpServer.createContext("/v1/proxy/unregister", this::handleUnregister);
         httpServer.createContext("/v1/proxy/send", this::handleSend);
         httpServer.createContext("/v1/proxy/servers", this::handleList);
+        httpServer.createContext("/v1/proxy/players", this::handlePlayers);
         httpServer.start();
     }
 
@@ -193,6 +194,36 @@ public final class MCMMProxyBridgePlugin {
                     info.getAddress().getPort()));
         }
         writeJson(ex, 200, "{\"status\":\"ok\",\"servers\":" + joiner + "}");
+    }
+
+    private void handlePlayers(HttpExchange ex) throws IOException {
+        if (!authorize(ex)) {
+            return;
+        }
+        String query = ex.getRequestURI().getQuery();
+        String serverId = "";
+        if (query != null && !query.isEmpty()) {
+            for (String p : query.split("&")) {
+                int idx = p.indexOf('=');
+                if (idx > 0 && "server_id".equalsIgnoreCase(p.substring(0, idx))) {
+                    serverId = URLDecoder.decode(p.substring(idx + 1), StandardCharsets.UTF_8);
+                }
+            }
+        }
+        if (serverId.isEmpty()) {
+            writeJson(ex, 400, "{\"status\":\"error\",\"message\":\"missing server_id\"}");
+            return;
+        }
+        Optional<RegisteredServer> target = proxyServer.getServer(serverId);
+        if (target.isEmpty()) {
+            writeJson(ex, 404, "{\"status\":\"error\",\"message\":\"server not found\"}");
+            return;
+        }
+        StringJoiner players = new StringJoiner(",", "[", "]");
+        for (Player p : target.get().getPlayersConnected()) {
+            players.add("\"" + escape(p.getUsername()) + "\"");
+        }
+        writeJson(ex, 200, "{\"status\":\"ok\",\"players\":" + players + "}");
     }
 
     private boolean authorize(HttpExchange ex) throws IOException {
