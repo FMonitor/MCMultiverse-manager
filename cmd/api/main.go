@@ -16,6 +16,7 @@ import (
 
 	"mcmm/internal/cmdreceiver"
 	"mcmm/internal/config"
+	"mcmm/internal/cronjob"
 	"mcmm/internal/log"
 	"mcmm/internal/pgsql"
 	"mcmm/internal/servertap"
@@ -90,6 +91,7 @@ func main() {
 		cfg.LobbyServerTapURL,
 		cfg.ServerTapAuthHeader,
 		cfg.ServerTapKey,
+		cfg.MiniTapHostPattern,
 		cfg.ProxyBridgeURL,
 		cfg.ProxyAuthHeader,
 		cfg.ProxyAuthToken,
@@ -97,6 +99,22 @@ func main() {
 	cmdHandler := cmdreceiver.NewHandlerI(cmdService)
 	cmdHandler.Register(mux)
 	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
+	cronCtx, cronCancel := context.WithCancel(context.Background())
+	defer cronCancel()
+
+	logger.Info("[step] Starting cron scheduler")
+	scheduler := cronjob.NewScheduler(repos, workerSvc, cronjob.Options{
+		OffInterval:       time.Duration(cfg.OffHour) * time.Hour,
+		RemoveDays:        cfg.RemoveDay,
+		InstanceTapURLFmt: cfg.MiniTapHostPattern,
+		ServerTapTimeout:  6 * time.Second,
+		ServerTapAuthName: cfg.ServerTapAuthHeader,
+		ServerTapAuthKey:  cfg.ServerTapKey,
+		Now:               time.Now,
+	})
+	scheduler.Start(cronCtx)
+	logger.Info("[ok] Cron scheduler started")
+
 	go func() {
 		logger.Infof("[ok] HTTP listening on %s", cfg.HTTPAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -133,6 +151,7 @@ func main() {
 
 	logger.Info("--- Stopping MCMultiverse Manager ---")
 	logger.Info("[step] Shutting down HTTP server")
+	cronCancel()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {

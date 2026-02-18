@@ -113,6 +113,55 @@ func (w *WorkerI) StartEmpty(ctx context.Context, instanceID int64, gameVersion 
 	return w.runStartFlow(ctx, inst, gameVersion, "")
 }
 
+func (w *WorkerI) StartExisting(ctx context.Context, instanceID int64) error {
+	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
+	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
+		return fmt.Errorf("read instance: %w", err)
+	}
+	if Status(inst.Status) == StatusOn {
+		return nil
+	}
+	if err := w.setStatus(ctx, &inst, StatusStarting); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set starting: %v", err))
+		return err
+	}
+	if err := w.startCompose(ctx, inst.ID); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("start compose: %v", err))
+		return err
+	}
+	time.Sleep(10 * time.Second)
+	if err := w.configureInstanceAccess(ctx, inst); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("configure access: %v", err))
+		return err
+	}
+	inst.LastActiveAt = toNullTime(w.opts.Now())
+	inst.HealthStatus = string(HealthHealthy)
+	inst.LastErrorMsg = sql.NullString{}
+	inst.LastHealthAt = toNullTime(w.opts.Now())
+	return w.setStatus(ctx, &inst, StatusOn)
+}
+
+func (w *WorkerI) StopOnly(ctx context.Context, instanceID int64) error {
+	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
+	if err != nil {
+		w.failInstanceByID(instanceID, fmt.Sprintf("read instance: %v", err))
+		return fmt.Errorf("read instance: %w", err)
+	}
+	if Status(inst.Status) == StatusOff {
+		return nil
+	}
+	if err := w.setStatus(ctx, &inst, StatusStopping); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("set stopping: %v", err))
+		return err
+	}
+	if err := w.stopCompose(ctx, inst.ID); err != nil {
+		_ = w.failInstance(ctx, &inst, fmt.Sprintf("stop compose: %v", err))
+		return err
+	}
+	return w.setStatus(ctx, &inst, StatusOff)
+}
+
 func (w *WorkerI) StopAndArchive(ctx context.Context, instanceID int64) error {
 	inst, err := w.repos.MapInstance.Read(ctx, instanceID)
 	if err != nil {
@@ -255,6 +304,22 @@ func (w *WorkerI) configureInstanceAccess(ctx context.Context, inst pgsql.MapIns
 	if err := allowAndOpUser(ctx, conn, inst.ID, owner.MCName, processed, w.logger); err != nil {
 		return err
 	}
+	// Sync invited members into whitelist (no OP).
+	members, err := w.repos.InstanceMember.ListByInstance(ctx, inst.ID)
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		u, err := w.repos.User.Read(ctx, m.UserID)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(m.Role, "member") {
+			if err := allowUserWhitelist(ctx, conn, inst.ID, u.MCName, processed, w.logger); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -280,6 +345,31 @@ func allowAndOpUser(
 		return err
 	}
 	if err := executeServerTapWithRetry(ctx, conn, instanceID, servertap.NewCommandBuilder("op").Arg(name).Build(), serverTapCommandMaxRetries, logger); err != nil {
+		return err
+	}
+	processed[key] = struct{}{}
+	return nil
+}
+
+func allowUserWhitelist(
+	ctx context.Context,
+	conn *servertap.Connector,
+	instanceID int64,
+	name string,
+	processed map[string]struct{},
+	logger interface {
+		Warnf(string, ...any)
+	},
+) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	key := strings.ToLower(name)
+	if _, exists := processed[key]; exists {
+		return nil
+	}
+	if err := executeServerTapWithRetry(ctx, conn, instanceID, "whitelist add "+name, serverTapCommandMaxRetries, logger); err != nil {
 		return err
 	}
 	processed[key] = struct{}{}

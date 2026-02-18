@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS map_instances (
   template_id BIGINT REFERENCES map_templates(id) ON DELETE SET NULL,
   source_type TEXT NOT NULL CHECK (source_type IN ('template', 'upload', 'empty')),
   game_version TEXT NOT NULL,
-  access_mode TEXT NOT NULL DEFAULT 'privacy' CHECK (access_mode IN ('privacy', 'public')),
+  access_mode TEXT NOT NULL DEFAULT 'privacy' CHECK (access_mode IN ('privacy', 'public', 'lockdown')),
   status TEXT NOT NULL CHECK (status IN ('Waiting', 'Preparing', 'Starting', 'On', 'Stopping', 'Off', 'Archived')),
   health_status TEXT NOT NULL DEFAULT 'unknown' CHECK (health_status IN ('unknown', 'healthy', 'start_failed', 'unreachable')),
   last_error_msg TEXT,

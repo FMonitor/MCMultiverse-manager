@@ -11,6 +11,8 @@ type Worker interface {
 	StartFromTemplate(ctx context.Context, instanceID int64, template pgsql.MapTemplate) error
 	StartFromUpload(ctx context.Context, instanceID int64, uploadWorldPath string) error
 	StartEmpty(ctx context.Context, instanceID int64, gameVersion string) error
+	StartExisting(ctx context.Context, instanceID int64) error
+	StopOnly(ctx context.Context, instanceID int64) error
 	StopAndArchive(ctx context.Context, instanceID int64) error
 	DeleteArchived(ctx context.Context, instanceID int64) error
 }

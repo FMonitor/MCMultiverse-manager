@@ -6,6 +6,8 @@ proxy_auth_header: "Authorization"
 proxy_auth_token: "replace-with-real-token"
 servertap_key: ""
 servertap_auth_header: "key"
+off_hour: 1
+remove_day: 14
 mini_servertap_port: 4567
 mini_servertap_host_pattern: "http://mcmm-inst-%d:4567"
 instance_network: "mcmm-network"

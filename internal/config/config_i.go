@@ -21,6 +21,8 @@ type Config struct {
 	ProxyAuthToken      string         `yaml:"proxy_auth_token"`
 	ServerTapKey        string         `yaml:"servertap_key"`
 	ServerTapAuthHeader string         `yaml:"servertap_auth_header"`
+	OffHour             int            `yaml:"off_hour"`
+	RemoveDay           int            `yaml:"remove_day"`
 	MiniServerTapPort   int            `yaml:"mini_servertap_port"`
 	MiniTapHostPattern  string         `yaml:"mini_servertap_host_pattern"`
 	InstanceNetwork     string         `yaml:"instance_network"`
@@ -110,6 +112,12 @@ func (c *Config) Validate() error {
 	if c.MiniServerTapPort <= 0 {
 		c.MiniServerTapPort = 4567
 	}
+	if c.OffHour <= 0 {
+		c.OffHour = 1
+	}
+	if c.RemoveDay <= 0 {
+		c.RemoveDay = 14
+	}
 	if c.MiniTapHostPattern == "" {
 		c.MiniTapHostPattern = fmt.Sprintf("http://mcmm-inst-%%d:%d", c.MiniServerTapPort)
 	}
@@ -143,6 +151,7 @@ func LogSummary(cfg Config) {
 	logger := ilog.Component("config")
 	logger.Infof("runtime paths: template=%s version=%s instance=%s archive=%s", cfg.TemplateRootPath, cfg.VersionRootPath, cfg.InstanceRootPath, cfg.ArchiveRootPath)
 	logger.Infof("servertap lobby=%s mini_pattern=%s instance_network=%s", cfg.LobbyServerTapURL, cfg.MiniTapHostPattern, cfg.InstanceNetwork)
+	logger.Infof("cron off_hour=%d remove_day=%d", cfg.OffHour, cfg.RemoveDay)
 	logger.Infof("proxy bridge url=%s auth_header=%s", cfg.ProxyBridgeURL, cfg.ProxyAuthHeader)
 	if cfg.ServerTapAuthHeader == "" {
 		logger.Warnf("servertap_auth_header is empty, fallback should be 'key'")

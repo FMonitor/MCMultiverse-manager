@@ -178,6 +178,17 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
                             .accessMode(args[2].toLowerCase(Locale.ROOT)),
                     "world set access");
         }
+        if ("on".equals(sub) || "off".equals(sub)) {
+            if (args.length != 3) {
+                player.sendMessage("Usage: /mcmm world <on|off> <instance_id|alias>");
+                return true;
+            }
+            String action = "on".equals(sub) ? "world_on" : "world_off";
+            return dispatch(player,
+                    new BackendClient.WorldAction(action, player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "world " + sub);
+        }
         if ("remove".equals(sub)) {
             if (args.length != 3) {
                 player.sendMessage("Usage: /mcmm world remove <instance_id|alias>");
@@ -225,6 +236,18 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             }
             return dispatch(player, action, "instance create");
         }
+        if (args.length == 3 && "on".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_on", player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "instance on");
+        }
+        if (args.length == 3 && "off".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_off", player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "instance off");
+        }
         if (args.length == 3 && "remove".equalsIgnoreCase(args[1])) {
             return dispatch(player,
                     new BackendClient.WorldAction("instance_remove", player.getUniqueId().toString(), player.getName())
@@ -243,7 +266,13 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
                             .worldAlias(args[2]),
                     "instance lockdown");
         }
-        player.sendMessage("Usage: /mcmm instance <list|create|stop|remove|lockdown> ...");
+        if (args.length == 3 && "unlock".equalsIgnoreCase(args[1])) {
+            return dispatch(player,
+                    new BackendClient.WorldAction("instance_unlock", player.getUniqueId().toString(), player.getName())
+                            .worldAlias(args[2]),
+                    "instance unlock");
+        }
+        player.sendMessage("Usage: /mcmm instance <list|create|on|off|remove|lockdown|unlock> ...");
         return true;
     }
 
@@ -370,6 +399,8 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         sender.sendMessage("Usage: /mcmm world remove <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm world <instance_id|alias>    # join world");
         sender.sendMessage("Usage: /mcmm world list");
+        sender.sendMessage("Usage: /mcmm world on <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm world off <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm world set <public|privacy>");
         sender.sendMessage("Usage: /mcmm world info [instance_id|alias]");
         sender.sendMessage("Usage: /mcmm world <world_alias> add user <user>");
@@ -379,9 +410,12 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
         sender.sendMessage("Usage: /mcmm template list");
         sender.sendMessage("Usage: /mcmm instance list");
         sender.sendMessage("Usage: /mcmm instance create <world_alias> [template_id|template_name]");
+        sender.sendMessage("Usage: /mcmm instance on <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm instance off <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm instance stop <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm instance remove <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm instance lockdown <instance_id|alias>");
+        sender.sendMessage("Usage: /mcmm instance unlock <instance_id|alias>");
         sender.sendMessage("Usage: /mcmm lobby");
         sender.sendMessage("Usage: /mcmm confirm");
         sender.sendMessage("Usage: /mcmm help");
@@ -447,26 +481,47 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             return prefixMatch(Collections.singletonList("list"), args[1]);
         }
         if ("instance".equalsIgnoreCase(args[0]) && args.length == 2 && adminView) {
-            return prefixMatch(Arrays.asList("list", "create", "stop", "remove", "lockdown"), args[1]);
+            return prefixMatch(Arrays.asList("list", "create", "on", "off", "stop", "remove", "lockdown", "unlock"), args[1]);
         }
         if ("instance".equalsIgnoreCase(args[0]) && args.length == 4 && "create".equalsIgnoreCase(args[1]) && adminView) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                maybeRefreshTemplateCache(p);
+                return prefixMatch(getTemplateHints(p.getUniqueId()), args[3]);
+            }
             return prefixMatch(Collections.singletonList("<template_id|template_name>"), args[3]);
+        }
+        if ("instance".equalsIgnoreCase(args[0]) && args.length == 3 &&
+                ("on".equalsIgnoreCase(args[1]) || "off".equalsIgnoreCase(args[1]) ||
+                 "stop".equalsIgnoreCase(args[1]) || "remove".equalsIgnoreCase(args[1]) ||
+                 "lockdown".equalsIgnoreCase(args[1]) || "unlock".equalsIgnoreCase(args[1])) &&
+                sender instanceof Player) {
+            Player p = (Player) sender;
+            maybeRefreshWorldCache(p);
+            return prefixMatch(getWorldHints(p.getUniqueId()), args[2]);
         }
         if ("world".equalsIgnoreCase(args[0]) && args.length == 2) {
             if (sender instanceof Player) {
                 Player p = (Player) sender;
                 maybeRefreshWorldCache(p);
-                List<String> base = new ArrayList<>(Arrays.asList("list", "info", "set", "remove"));
+                List<String> base = new ArrayList<>(Arrays.asList("list", "info", "set", "on", "off", "remove"));
                 base.addAll(getWorldHints(p.getUniqueId()));
                 return prefixMatch(base, args[1]);
             }
-            return prefixMatch(Arrays.asList("list", "info", "set", "remove", "<world_alias>"), args[1]);
+            return prefixMatch(Arrays.asList("list", "info", "set", "on", "off", "remove", "<world_alias>"), args[1]);
         }
         if ("world".equalsIgnoreCase(args[0]) && args.length == 3 && "set".equalsIgnoreCase(args[1])) {
             return prefixMatch(Arrays.asList("public", "privacy"), args[2]);
         }
         if ("world".equalsIgnoreCase(args[0]) && args.length == 3 &&
                 ("info".equalsIgnoreCase(args[1]) || "remove".equalsIgnoreCase(args[1])) &&
+                sender instanceof Player) {
+            Player p = (Player) sender;
+            maybeRefreshWorldCache(p);
+            return prefixMatch(getWorldHints(p.getUniqueId()), args[2]);
+        }
+        if ("world".equalsIgnoreCase(args[0]) && args.length == 3 &&
+                ("on".equalsIgnoreCase(args[1]) || "off".equalsIgnoreCase(args[1])) &&
                 sender instanceof Player) {
             Player p = (Player) sender;
             maybeRefreshWorldCache(p);
@@ -480,6 +535,14 @@ public final class WorldCommandExecutor implements CommandExecutor, TabCompleter
             return prefixMatch(Collections.singletonList("user"), args[3]);
         }
         if ("player".equalsIgnoreCase(args[0]) && args.length == 2) {
+            if (sender instanceof Player) {
+                Player p = (Player) sender;
+                String subPrefix = args[1] == null ? "" : args[1].toLowerCase(Locale.ROOT);
+                if ("invite".startsWith(subPrefix) || "reject".startsWith(subPrefix)) {
+                    maybeRefreshPlayerCache(p);
+                    maybeRefreshWorldCache(p);
+                }
+            }
             return prefixMatch(Arrays.asList("invite", "reject"), args[1]);
         }
         if ("player".equalsIgnoreCase(args[0]) && args.length == 3 &&

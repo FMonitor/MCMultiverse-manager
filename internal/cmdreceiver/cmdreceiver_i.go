@@ -107,6 +107,7 @@ type ServiceI struct {
 	lobbyTapURL        string
 	serverTapKey       string
 	serverTapAuthName  string
+	instanceTapPattern string
 	proxyBridgeURL     string
 	proxyAuthHeader    string
 	proxyAuthToken     string
@@ -124,6 +125,7 @@ func NewServiceI(
 	lobbyTapURL string,
 	serverTapAuthName string,
 	serverTapKey string,
+	instanceTapPattern string,
 	proxyBridgeURL string,
 	proxyAuthHeader string,
 	proxyAuthToken string,
@@ -141,6 +143,7 @@ func NewServiceI(
 		lobbyTapURL:        strings.TrimSpace(lobbyTapURL),
 		serverTapAuthName:  strings.TrimSpace(serverTapAuthName),
 		serverTapKey:       strings.TrimSpace(serverTapKey),
+		instanceTapPattern: strings.TrimSpace(instanceTapPattern),
 		proxyBridgeURL:     strings.TrimRight(strings.TrimSpace(proxyBridgeURL), "/"),
 		proxyAuthHeader:    strings.TrimSpace(proxyAuthHeader),
 		proxyAuthToken:     strings.TrimSpace(proxyAuthToken),
@@ -200,6 +203,10 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 		return s.handleWorldJoin(ctx, req, actor)
 	case "world_set_access":
 		return s.handleWorldSetAccess(ctx, req, actor)
+	case "world_on":
+		return s.handleWorldPower(ctx, req, actor, true)
+	case "world_off":
+		return s.handleWorldPower(ctx, req, actor, false)
 	case "lobby_join":
 		return s.handleLobbyJoin(ctx, actor)
 	case "world_remove", "delete":
@@ -219,11 +226,17 @@ func (s *ServiceI) HandleWorldCommand(ctx context.Context, req WorldCommandReque
 	case "instance_create":
 		return s.handleInstanceCreate(ctx, req, actor)
 	case "instance_stop":
-		return s.handleInstanceStop(ctx, req, actor)
+		return s.handleInstancePower(ctx, req, actor, false)
+	case "instance_on":
+		return s.handleInstancePower(ctx, req, actor, true)
+	case "instance_off":
+		return s.handleInstancePower(ctx, req, actor, false)
 	case "instance_remove":
 		return s.handleInstanceRemove(ctx, req, actor)
 	case "instance_lockdown":
 		return s.handleInstanceLockdown(ctx, req, actor)
+	case "instance_unlock":
+		return s.handleInstanceUnlock(ctx, req, actor)
 	case "template_list":
 		return s.handleTemplateList(ctx)
 	case "create_legacy":
@@ -580,7 +593,7 @@ func (s *ServiceI) handleDelete(ctx context.Context, req WorldCommandRequest, ac
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "permission denied"}
 	}
 
-	_, _, err = s.repos.UserRequest.CreateAcceptedIfNotExists(
+	ur, _, err := s.repos.UserRequest.CreateAcceptedIfNotExists(
 		ctx,
 		req.RequestID,
 		"delete_instance",
@@ -590,12 +603,23 @@ func (s *ServiceI) handleDelete(ctx context.Context, req WorldCommandRequest, ac
 	if err != nil {
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "delete request failed"}
 	}
-	if err := s.worker.StopAndArchive(ctx, instanceID); err != nil {
-		_ = s.repos.UserRequest.MarkRequestResult(ctx, req.RequestID, "failed", json.RawMessage(`{"step":"stop_archive"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
-		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "archive failed"}
+	ur.Status = "processing"
+	_ = s.repos.UserRequest.Update(ctx, ur)
+
+	go func(requestID string, id int64, alias string) {
+		runCtx := context.Background()
+		if err := s.worker.StopAndArchive(runCtx, id); err != nil {
+			s.logger.Errorf("world remove failed instance=%d alias=%s err=%v", id, alias, err)
+			_ = s.repos.UserRequest.MarkRequestResult(runCtx, requestID, "failed", json.RawMessage(`{"step":"stop_archive"}`), sql.NullString{String: "worker_error", Valid: true}, sql.NullString{String: err.Error(), Valid: true})
+			return
+		}
+		_ = s.repos.UserRequest.MarkRequestResult(runCtx, requestID, "succeeded", json.RawMessage(fmt.Sprintf(`{"instance_id":%d}`, id)), sql.NullString{}, sql.NullString{})
+	}(req.RequestID, instanceID, inst.Alias)
+
+	return http.StatusAccepted, WorldCommandResponse{
+		Status:  "accepted",
+		Message: fmt.Sprintf("world remove started: #%d:%s", inst.ID, inst.Alias),
 	}
-	_ = s.repos.UserRequest.MarkRequestResult(ctx, req.RequestID, "succeeded", json.RawMessage(fmt.Sprintf(`{"instance_id":%d}`, instanceID)), sql.NullString{}, sql.NullString{})
-	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "delete accepted"}
 }
 
 func (s *ServiceI) handleMemberAdd(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -617,10 +641,12 @@ func (s *ServiceI) handleMemberAdd(ctx context.Context, req WorldCommandRequest,
 		Role:       "member",
 	}); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			_ = s.updateInstanceWhitelist(ctx, instanceID, target.MCName, true)
 			return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "already a member"}
 		}
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "add member failed"}
 	}
+	_ = s.updateInstanceWhitelist(ctx, instanceID, target.MCName, true)
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "member added"}
 }
 
@@ -640,6 +666,7 @@ func (s *ServiceI) handleMemberRemove(ctx context.Context, req WorldCommandReque
 	if err := s.repos.InstanceMember.DeleteByInstanceAndUser(ctx, instanceID, target.ID); err != nil {
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "remove member failed"}
 	}
+	_ = s.updateInstanceWhitelist(ctx, instanceID, target.MCName, false)
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "member removed"}
 }
 
@@ -726,6 +753,32 @@ func (s *ServiceI) handleWorldSetAccess(ctx context.Context, req WorldCommandReq
 		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "update access mode failed"}
 	}
 	return http.StatusOK, WorldCommandResponse{Status: "accepted", Message: "access mode updated"}
+}
+
+func (s *ServiceI) handleWorldPower(ctx context.Context, req WorldCommandRequest, actor pgsql.User, on bool) (int, WorldCommandResponse) {
+	inst, err := s.resolveInstance(ctx, req.WorldAlias)
+	if err != nil {
+		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
+	}
+	if !canManage(actor, inst.OwnerID) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "permission denied"}
+	}
+	go func(id int64, alias string) {
+		runCtx := context.Background()
+		var runErr error
+		if on {
+			runErr = s.worker.StartExisting(runCtx, id)
+		} else {
+			runErr = s.worker.StopOnly(runCtx, id)
+		}
+		if runErr != nil {
+			s.logger.Errorf("world power failed instance=%d alias=%s on=%v err=%v", id, alias, on, runErr)
+		}
+	}(inst.ID, inst.Alias)
+	if on {
+		return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("world start requested: #%d:%s", inst.ID, inst.Alias)}
+	}
+	return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("world stop requested: #%d:%s", inst.ID, inst.Alias)}
 }
 
 func (s *ServiceI) handleWorldInfo(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -866,11 +919,30 @@ func (s *ServiceI) handleInstanceCreate(ctx context.Context, req WorldCommandReq
 	}
 }
 
-func (s *ServiceI) handleInstanceStop(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+func (s *ServiceI) handleInstancePower(ctx context.Context, req WorldCommandRequest, actor pgsql.User, on bool) (int, WorldCommandResponse) {
 	if !isAdmin(actor) {
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
 	}
-	return http.StatusNotImplemented, WorldCommandResponse{Status: "error", Message: "instance stop not implemented yet; use instance remove"}
+	inst, err := s.resolveInstance(ctx, req.WorldAlias)
+	if err != nil {
+		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
+	}
+	go func(id int64, alias string) {
+		runCtx := context.Background()
+		var runErr error
+		if on {
+			runErr = s.worker.StartExisting(runCtx, id)
+		} else {
+			runErr = s.worker.StopOnly(runCtx, id)
+		}
+		if runErr != nil {
+			s.logger.Errorf("instance power failed instance=%d alias=%s on=%v err=%v", id, alias, on, runErr)
+		}
+	}(inst.ID, inst.Alias)
+	if on {
+		return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("instance start requested: #%d:%s", inst.ID, inst.Alias)}
+	}
+	return http.StatusAccepted, WorldCommandResponse{Status: "accepted", Message: fmt.Sprintf("instance stop requested: #%d:%s", inst.ID, inst.Alias)}
 }
 
 func (s *ServiceI) handleInstanceRemove(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
@@ -899,7 +971,38 @@ func (s *ServiceI) handleInstanceLockdown(ctx context.Context, req WorldCommandR
 	if !isAdmin(actor) {
 		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
 	}
-	return http.StatusNotImplemented, WorldCommandResponse{Status: "error", Message: "instance lockdown not implemented yet"}
+	inst, err := s.resolveInstance(ctx, req.WorldAlias)
+	if err != nil {
+		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
+	}
+	inst.AccessMode = "lockdown"
+	if err := s.repos.MapInstance.Update(ctx, inst); err != nil {
+		s.logger.Errorf("instance lockdown update failed instance=%d alias=%s err=%v", inst.ID, inst.Alias, err)
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "instance lockdown failed"}
+	}
+	return http.StatusOK, WorldCommandResponse{
+		Status:  "accepted",
+		Message: fmt.Sprintf("instance locked: #%d:%s", inst.ID, inst.Alias),
+	}
+}
+
+func (s *ServiceI) handleInstanceUnlock(ctx context.Context, req WorldCommandRequest, actor pgsql.User) (int, WorldCommandResponse) {
+	if !isAdmin(actor) {
+		return http.StatusForbidden, WorldCommandResponse{Status: "error", Message: "op only"}
+	}
+	inst, err := s.resolveInstance(ctx, req.WorldAlias)
+	if err != nil {
+		return http.StatusNotFound, WorldCommandResponse{Status: "error", Message: "instance not found"}
+	}
+	inst.AccessMode = "privacy"
+	if err := s.repos.MapInstance.Update(ctx, inst); err != nil {
+		s.logger.Errorf("instance unlock update failed instance=%d alias=%s err=%v", inst.ID, inst.Alias, err)
+		return http.StatusInternalServerError, WorldCommandResponse{Status: "error", Message: "instance unlock failed"}
+	}
+	return http.StatusOK, WorldCommandResponse{
+		Status:  "accepted",
+		Message: fmt.Sprintf("instance unlocked: #%d:%s", inst.ID, inst.Alias),
+	}
 }
 
 func (s *ServiceI) handlePlayerList(ctx context.Context) (int, WorldCommandResponse) {
@@ -997,6 +1100,9 @@ func isOpOnlyAction(action string) bool {
 }
 
 func (s *ServiceI) canJoinInstance(ctx context.Context, actor pgsql.User, inst pgsql.MapInstance) bool {
+	if strings.EqualFold(inst.AccessMode, "lockdown") {
+		return actor.ServerRole == "admin"
+	}
 	if actor.ServerRole == "admin" || actor.ID == inst.OwnerID {
 		return true
 	}
@@ -1226,6 +1332,34 @@ func (s *ServiceI) sendPlayerToServer(ctx context.Context, playerName, serverID 
 		return fmt.Errorf("proxy send failed: %w", err)
 	}
 	return nil
+}
+
+func (s *ServiceI) updateInstanceWhitelist(ctx context.Context, instanceID int64, playerName string, add bool) error {
+	if strings.TrimSpace(s.instanceTapPattern) == "" {
+		return nil
+	}
+	inst, err := s.repos.MapInstance.Read(ctx, instanceID)
+	if err != nil {
+		return err
+	}
+	// If container is not online, DB membership is enough; whitelist will be synced on next start.
+	if inst.Status != string(worker.StatusOn) {
+		return nil
+	}
+	tapURL := fmt.Sprintf(s.instanceTapPattern, instanceID)
+	conn, err := servertap.NewConnectorWithAuth(tapURL, 5*time.Second, s.serverTapAuthName, s.serverTapKey)
+	if err != nil {
+		return err
+	}
+	cmd := "whitelist remove " + playerName
+	if add {
+		cmd = "whitelist add " + playerName
+	}
+	_, err = conn.Execute(ctx, servertap.ExecuteRequest{Command: cmd})
+	if err != nil {
+		s.logger.Warnf("whitelist update failed instance=%d add=%v player=%s err=%v", instanceID, add, playerName, err)
+	}
+	return err
 }
 
 func (s *ServiceI) proxyRegister(ctx context.Context, serverID, host string, port int) error {

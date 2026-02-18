@@ -25,6 +25,8 @@
 | `/mcmm world list` | 玩家 | 列出自己可加入的世界（owner/member/public）。 |
 | `/mcmm world <instance_id\|alias>` | 玩家 | 加入世界（短 id 或别名都可）。 |
 | `/mcmm world info [instance_id\|alias]` | 玩家 | 查看世界信息。 |
+| `/mcmm world on <instance_id\|alias>` | owner/OP | 启动世界容器。 |
+| `/mcmm world off <instance_id\|alias>` | owner/OP | 关闭世界容器。 |
 | `/mcmm world set <public\|privacy>` | owner/OP | 设置访问模式。 |
 | `/mcmm world remove <instance_id\|alias>` | owner/OP | 删除（归档）世界，需二次确认。 |
 | `/mcmm world <world_alias> add user <user>` | owner/OP | 添加成员。 |
@@ -43,9 +45,12 @@
 | `/mcmm template list` | 玩家 | 列模板（含 `#id:tag (version)`）。 |
 | `/mcmm instance list` | OP | 列出所有实例。 |
 | `/mcmm instance create <world_alias> [template_id\|template_name]` | OP | 直接创建实例（绕过申请）。 |
-| `/mcmm instance stop <instance_id\|alias>` | OP | 停止实例（预留，当前未实现）。 |
+| `/mcmm instance on <instance_id\|alias>` | OP | 启动任意实例容器。 |
+| `/mcmm instance off <instance_id\|alias>` | OP | 关闭任意实例容器。 |
+| `/mcmm instance stop <instance_id\|alias>` | OP | 兼容别名，等同于 `instance off`。 |
 | `/mcmm instance remove <instance_id\|alias>` | OP | 归档并下线实例。 |
-| `/mcmm instance lockdown <instance_id\|alias>` | OP | 锁定实例（预留，当前未实现）。 |
+| `/mcmm instance lockdown <instance_id\|alias>` | OP | 锁定实例（仅 OP 可加入）。 |
+| `/mcmm instance unlock <instance_id\|alias>` | OP | 解除锁定（恢复为 `privacy`）。 |
 | `/mcmm confirm` | 玩家 | 确认删除。 |
 | `/mcmm help` | 玩家 | 显示帮助。 |
 
@@ -60,6 +65,8 @@
 | `request_cancel` | `req cancel` |
 | `world_list` | `world list` |
 | `world_info` | `world info` |
+| `world_on` | `world on` |
+| `world_off` | `world off` |
 | `world_set_access` | `world set` |
 | `world_remove` | `world remove` |
 | `member_add` | `world <alias> add user` |
@@ -69,6 +76,9 @@
 | `template_list` | `template list` |
 | `instance_list` | `instance list` |
 | `instance_create` | `instance create` |
+| `instance_on` | `instance on` |
+| `instance_off` | `instance off` |
 | `instance_stop` | `instance stop` |
 | `instance_remove` | `instance remove` |
 | `instance_lockdown` | `instance lockdown` |
+| `instance_unlock` | `instance unlock` |
